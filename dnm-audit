@@ -150,7 +150,7 @@ def main():
 
         digest_data.append(
             {
-                "name": name,
+                "repo": name,
                 "findings": len(all_findings),
                 "critical": len([f for f in all_findings if f.get("severity") == "critical"]),
                 "files_reviewed": len(candidates),

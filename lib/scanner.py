@@ -1,5 +1,6 @@
 """File discovery and static analysis."""
 
+import fnmatch
 import hashlib
 import re
 import subprocess
@@ -20,7 +21,8 @@ def discover_files(
 ) -> list[Path]:
     """Find all reviewable files in source_dirs, excluding ignore_dirs. Sorted."""
     repo_path = Path(repo_path)
-    ignore_parts = {d.strip("/") for d in ignore_dirs}
+    ignore_parts = {d.strip("/") for d in ignore_dirs if not d.startswith("*")}
+    ignore_globs = [d for d in ignore_dirs if d.startswith("*")]
     found: list[Path] = []
 
     for sd in source_dirs:
@@ -33,6 +35,8 @@ def discover_files(
             if p.suffix not in REVIEWABLE_EXTENSIONS:
                 continue
             if any(part in ignore_parts for part in p.relative_to(repo_path).parts):
+                continue
+            if any(fnmatch.fnmatch(p.name, g) for g in ignore_globs):
                 continue
             found.append(p)
 
