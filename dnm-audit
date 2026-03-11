@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""
+dnm-audit - Daily Code Health Audit CLI
+
+Usage:
+    dnm-audit                      # Auto: today's lens, all eligible repos
+    dnm-audit --repo dnomia_app    # Specific repo
+    dnm-audit --lens architecture  # Specific lens (override schedule)
+    dnm-audit --full               # Full scan (ignore skip logic)
+    dnm-audit --dry-run            # Show what would be reviewed, don't call LLMs
+    dnm-audit --llm claude         # Use only Claude (default: both)
+    dnm-audit --llm gemini         # Use only Gemini
+    dnm-audit --quiet              # No progress output (for backgrounding)
+"""
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "lib"))
+
+from config import REPOS, LENS_SCHEDULE, VAULT_DIR, DB_PATH
+from db import HealthDB
+from scanner import scan_repo
+from reviewer import review_batch, LLMChoice
+from reporter import generate_repo_report, generate_digest
+
+
+def get_todays_lens() -> str | None:
+    weekday = datetime.now().weekday()
+    return LENS_SCHEDULE.get(weekday)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Code Health Audit")
+    parser.add_argument("--repo", help="Specific repo name")
+    parser.add_argument(
+        "--lens",
+        help="Override lens (architecture/duplication/complexity/interfaces/resilience)",
+    )
+    parser.add_argument("--full", action="store_true", help="Full scan, ignore skip logic")
+    parser.add_argument("--dry-run", action="store_true", help="Show plan without executing")
+    parser.add_argument("--llm", choices=["claude", "gemini", "both"], default="both")
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args()
+
+    lens = args.lens or get_todays_lens()
+    if lens is None:
+        if not args.quiet:
+            print("Weekend. Use --lens to override.")
+        return
+
+    repos = REPOS
+    if args.repo:
+        repos = [r for r in repos if r["name"] == args.repo]
+        if not repos:
+            print(f"Unknown repo: {args.repo}")
+            return
+
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VAULT_DIR.mkdir(parents=True, exist_ok=True)
+
+    db = HealthDB(DB_PATH)
+    llm = LLMChoice(args.llm)
+
+    if not args.quiet:
+        print(f"Lens: {lens} | Repos: {', '.join(r['name'] for r in repos)} | LLM: {args.llm}")
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    digest_data = []
+
+    for repo_config in repos:
+        name = repo_config["name"]
+        repo_path = repo_config["path"]
+
+        if not repo_path.exists():
+            if not args.quiet:
+                print(f"  {name}: path not found, skipping")
+            continue
+
+        if not args.quiet:
+            print(f"\n{'=' * 40}")
+            print(f"  {name}")
+            print(f"{'=' * 40}")
+            print("  Static scan...")
+
+        scan_results = scan_repo(repo_config)
+
+        current_files = set()
+        for sr in scan_results:
+            db.upsert_file(name, sr["path"], sr["hash"], sr["complexity"], sr["issues"])
+            current_files.add(sr["path"])
+        db.cleanup_removed(name, current_files)
+
+        if args.full:
+            candidates = db.get_all_files(name)
+        else:
+            candidates = db.get_candidates(name, lens=lens)
+
+        if not candidates:
+            if not args.quiet:
+                print(f"  No candidates for {lens} lens")
+            continue
+
+        if not args.quiet:
+            print(f"  Candidates: {len(candidates)} files")
+
+        if args.dry_run:
+            for c in candidates:
+                print(f"    {c['path']} (complexity={c['complexity']}, issues={c['static_issues']})")
+            continue
+
+        if not args.quiet:
+            print("  Reviewing...")
+
+        all_findings = review_batch(
+            repo_config=repo_config,
+            candidates=candidates,
+            lens=lens,
+            llm=llm,
+            quiet=args.quiet,
+        )
+
+        for c in candidates:
+            file_findings = [
+                f
+                for f in all_findings
+                if f.get("file", "").endswith(c["path"]) or f.get("file") == c["path"]
+            ]
+            db.mark_reviewed(name, c["path"], lens=lens, findings_count=len(file_findings))
+
+        stats = db.get_repo_stats(name)
+        report = generate_repo_report(
+            repo_name=name,
+            lens=lens,
+            findings=all_findings,
+            files_reviewed=len(candidates),
+            files_total=stats["total_files"],
+        )
+
+        report_dir = VAULT_DIR / date_str
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"{name}.md"
+        report_path.write_text(report)
+
+        if not args.quiet:
+            print(f"  Report: {report_path}")
+            print(f"  Findings: {len(all_findings)}")
+
+        digest_data.append(
+            {
+                "name": name,
+                "findings": len(all_findings),
+                "critical": len([f for f in all_findings if f.get("severity") == "critical"]),
+                "files_reviewed": len(candidates),
+            }
+        )
+
+    if digest_data and not args.dry_run:
+        digest = generate_digest(lens=lens, repo_summaries=digest_data)
+        digest_path = VAULT_DIR / date_str / "DIGEST.md"
+        digest_path.write_text(digest)
+        if not args.quiet:
+            print(f"\nDigest: {digest_path}")
+
+
+if __name__ == "__main__":
+    main()
