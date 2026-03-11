@@ -1,6 +1,7 @@
 """Dual-LLM reviewer using Claude and Gemini CLI headless modes."""
 
 import json
+import os
 import re
 import subprocess
 from collections import defaultdict
@@ -115,12 +116,16 @@ def call_llm(cmd: str, prompt: str, quiet: bool = False) -> str:
     if cmd == CLAUDE_CMD:
         args.extend(["--output-format", "text"])
 
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+
     try:
         result = subprocess.run(
             args,
             capture_output=True,
             text=True,
             timeout=300,
+            env=env,
         )
         return result.stdout
     except FileNotFoundError:
