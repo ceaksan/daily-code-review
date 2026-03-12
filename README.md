@@ -166,6 +166,43 @@ Priority queue selects files by `(static_issues * 10 + complexity)` descending, 
 
 Edit files in `prompts/` to adjust review criteria. `system-base.md` defines the output JSON format. Each `lens-*.md` defines what to look for in that lens.
 
+## Scheduling
+
+### Option 1: Cron
+
+Best for fully automated daily runs. Works headless, no active session needed.
+
+```bash
+# Run every weekday at 09:00
+0 9 * * 1-5 /path/to/dnm-audit --quiet >> /tmp/dnm-audit.log 2>&1
+```
+
+| Pros | Cons |
+|------|------|
+| Runs unattended, no open terminal needed | No real-time feedback during review |
+| System-level scheduling, survives reboots | Log-only output, need to check reports manually |
+| Predictable, fires exactly on schedule | Errors are silent unless you check logs |
+
+### Option 2: Claude Code `/loop`
+
+Best for monitoring candidates during active development sessions. Requires Claude Code CLI.
+
+```bash
+# Check candidates every 30 minutes (dry-run, no LLM calls)
+/loop 30m ./dnm-audit --dry-run --quiet
+
+# Full review every 2 hours
+/loop 2h ./dnm-audit --quiet
+```
+
+| Pros | Cons |
+|------|------|
+| Real-time feedback in your terminal | Only runs while Claude Code session is open |
+| Easy to start/stop, no config files | Full review creates nested LLM calls (higher token cost) |
+| Good for dry-run monitoring during dev | Not suitable for daily automation |
+
+Both options can be combined: cron for the daily scheduled review, `/loop --dry-run` for candidate awareness during development.
+
 ## Tests
 
 ```bash
