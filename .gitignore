@@ -3,3 +3,4 @@ __pycache__/
 *.db
 .venv/
 lib/config.py
+architecture.md
