@@ -1,6 +1,7 @@
 """Tests for lib/scanner.py"""
 
 import json
+import time
 from pathlib import Path
 
 from dnm_audit.scanner import (
@@ -132,3 +133,35 @@ class TestParseEslintOutput:
 
         result = parse_eslint_output("not json")
         assert result == {}
+
+
+class TestParallelScan:
+    def test_parallel_faster_than_sequential(self, monkeypatch, tmp_path):
+        """Both tools run concurrently, not sequentially."""
+        import dnm_audit.scanner as scanner
+
+        call_times = []
+
+        def slow_run_tool(cmd, cwd):
+            call_times.append(time.monotonic())
+            time.sleep(0.1)
+            if "radon" in cmd[0]:
+                return "src/app.py\n    F 1:0 f - A (5)\n"
+            return "src/app.py:1:1: E501 line\n"
+
+        monkeypatch.setattr(scanner, "run_tool", slow_run_tool)
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("x = 1\n")
+
+        scanner.scan_repo(
+            {
+                "path": str(tmp_path),
+                "source_dirs": ["src/"],
+                "ignore_dirs": [],
+                "languages": ["python"],
+            }
+        )
+
+        assert len(call_times) >= 2
+        assert abs(call_times[1] - call_times[0]) < 0.05

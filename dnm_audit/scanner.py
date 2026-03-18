@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dnm_audit.config import ESLINT_CMD, REVIEWABLE_EXTENSIONS, RUFF_SELECT
@@ -135,9 +136,6 @@ def scan_repo(repo_config: dict) -> list[dict]:
     if "python" in languages:
         py_files = [str(f.relative_to(repo_path)) for f in files if f.suffix == ".py"]
         if py_files:
-            radon_raw = run_tool(["radon", "cc", "-s"] + py_files, cwd=repo_path)
-            complexity_map = parse_radon_output(radon_raw)
-
             ruff_cmd = [
                 "ruff",
                 "check",
@@ -146,8 +144,13 @@ def scan_repo(repo_config: dict) -> list[dict]:
                 "--select",
                 RUFF_SELECT,
             ]
-            ruff_raw = run_tool(ruff_cmd + py_files, cwd=repo_path)
-            issues_map = parse_ruff_output(ruff_raw)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                radon_future = pool.submit(
+                    run_tool, ["radon", "cc", "-s"] + py_files, repo_path
+                )
+                ruff_future = pool.submit(run_tool, ruff_cmd + py_files, repo_path)
+                complexity_map = parse_radon_output(radon_future.result())
+                issues_map = parse_ruff_output(ruff_future.result())
 
     if any(lang in languages for lang in ("typescript", "javascript")):
         ts_exts = {".ts", ".tsx", ".js", ".jsx"}
