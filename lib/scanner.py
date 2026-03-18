@@ -2,11 +2,16 @@
 
 import fnmatch
 import hashlib
+import logging
 import re
 import subprocess
 from pathlib import Path
 
 from config import REVIEWABLE_EXTENSIONS
+
+logger = logging.getLogger(__name__)
+
+TOOL_TIMEOUT = 120
 
 
 def file_hash(path: Path) -> str:
@@ -81,17 +86,21 @@ def parse_ruff_output(raw: str) -> dict[str, int]:
 
 
 def run_tool(cmd: list[str], cwd: Path) -> str:
-    """Run subprocess with timeout=120, return stdout+stderr."""
+    """Run subprocess, return stdout+stderr. Logs warnings on failure."""
     try:
         proc = subprocess.run(
             cmd,
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=TOOL_TIMEOUT,
         )
         return proc.stdout + proc.stderr
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        logger.warning("Tool not found: %s", cmd[0])
+        return ""
+    except subprocess.TimeoutExpired:
+        logger.warning("Tool timed out after %ds: %s", TOOL_TIMEOUT, cmd[0])
         return ""
 
 

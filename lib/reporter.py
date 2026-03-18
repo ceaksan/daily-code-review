@@ -1,3 +1,5 @@
+"""Markdown report generation for audit findings."""
+
 from datetime import datetime
 
 SEVERITY_MAP = {

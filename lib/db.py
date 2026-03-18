@@ -6,6 +6,8 @@ from pathlib import Path
 
 from config import DAILY_FILE_BUDGET
 
+ISSUE_WEIGHT = 10
+
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS file_health (
     repo TEXT NOT NULL,
@@ -106,7 +108,7 @@ class HealthDB:
         self, repo: str, lens: str, limit: int = DAILY_FILE_BUDGET
     ) -> list[dict]:
         cur = self._conn.execute(
-            """SELECT * FROM file_health
+            f"""SELECT * FROM file_health
                WHERE repo = ?
                  AND NOT (
                      status = 'clean'
@@ -114,7 +116,7 @@ class HealthDB:
                      AND content_hash = previous_hash
                  )
                ORDER BY
-                 (static_issues * 10 + complexity) DESC,
+                 (static_issues * {ISSUE_WEIGHT} + complexity) DESC,
                  CASE WHEN last_llm_date IS NULL THEN 0 ELSE 1 END,
                  last_llm_date ASC
                LIMIT ?""",
@@ -124,9 +126,9 @@ class HealthDB:
 
     def get_all_files(self, repo: str) -> list[dict]:
         cur = self._conn.execute(
-            """SELECT * FROM file_health
+            f"""SELECT * FROM file_health
                WHERE repo = ?
-               ORDER BY (static_issues * 10 + complexity) DESC""",
+               ORDER BY (static_issues * {ISSUE_WEIGHT} + complexity) DESC""",
             (repo,),
         )
         return [dict(r) for r in cur.fetchall()]

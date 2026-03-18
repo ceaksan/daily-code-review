@@ -26,10 +26,110 @@ from scanner import scan_repo
 from reviewer import review_batch, LLMChoice
 from reporter import generate_repo_report, generate_digest
 
+SEPARATOR_WIDTH = 40
+
 
 def get_todays_lens() -> str | None:
     weekday = datetime.now().weekday()
     return LENS_SCHEDULE.get(weekday)
+
+
+def run_repo_audit(repo_config, db, lens, llm, args, date_str):
+    """Run audit pipeline for a single repo. Returns digest entry or None."""
+    name = repo_config["name"]
+    repo_path = repo_config["path"]
+
+    if not repo_path.exists():
+        if not args.quiet:
+            print(f"  {name}: path not found, skipping")
+        return None
+
+    if not args.quiet:
+        print(f"\n{'=' * SEPARATOR_WIDTH}")
+        print(f"  {name}")
+        print(f"{'=' * SEPARATOR_WIDTH}")
+        print("  Static scan...")
+
+    scan_results = scan_repo(repo_config)
+
+    current_files = set()
+    for sr in scan_results:
+        db.upsert_file(
+            name, sr["path"], sr["hash"], sr["complexity"], sr["issues"]
+        )
+        current_files.add(sr["path"])
+    db.cleanup_removed(name, current_files)
+
+    if args.full:
+        candidates = db.get_all_files(name)
+    else:
+        candidates = db.get_candidates(name, lens=lens)
+
+    if not candidates:
+        if not args.quiet:
+            print(f"  No candidates for {lens} lens")
+        return None
+
+    if not args.quiet:
+        print(f"  Candidates: {len(candidates)} files")
+
+    if args.dry_run:
+        for c in candidates:
+            print(
+                f"    {c['path']}"
+                f" (complexity={c['complexity']},"
+                f" issues={c['static_issues']})"
+            )
+        return None
+
+    if not args.quiet:
+        print("  Reviewing...")
+
+    all_findings = review_batch(
+        repo_config=repo_config,
+        candidates=candidates,
+        lens=lens,
+        llm=llm,
+        quiet=args.quiet,
+    )
+
+    for c in candidates:
+        file_findings = [
+            f
+            for f in all_findings
+            if f.get("file", "").endswith(c["path"])
+            or f.get("file") == c["path"]
+        ]
+        db.mark_reviewed(
+            name, c["path"], lens=lens, findings_count=len(file_findings)
+        )
+
+    stats = db.get_repo_stats(name)
+    report = generate_repo_report(
+        repo_name=name,
+        lens=lens,
+        findings=all_findings,
+        files_reviewed=len(candidates),
+        files_total=stats["total_files"],
+    )
+
+    report_dir = VAULT_DIR / date_str
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"{name}.md"
+    report_path.write_text(report)
+
+    if not args.quiet:
+        print(f"  Report: {report_path}")
+        print(f"  Findings: {len(all_findings)}")
+
+    return {
+        "repo": name,
+        "findings": len(all_findings),
+        "critical": len(
+            [f for f in all_findings if f.get("severity") == "critical"]
+        ),
+        "files_reviewed": len(candidates),
+    }
 
 
 def main():
@@ -37,11 +137,18 @@ def main():
     parser.add_argument("--repo", help="Specific repo name")
     parser.add_argument(
         "--lens",
-        help="Override lens (architecture/duplication/complexity/interfaces/resilience)",
+        help="Override lens"
+        " (architecture/duplication/complexity/interfaces/resilience)",
     )
-    parser.add_argument("--full", action="store_true", help="Full scan, ignore skip logic")
-    parser.add_argument("--dry-run", action="store_true", help="Show plan without executing")
-    parser.add_argument("--llm", choices=["claude", "gemini", "both"], default="both")
+    parser.add_argument(
+        "--full", action="store_true", help="Full scan, ignore skip logic"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show plan without executing"
+    )
+    parser.add_argument(
+        "--llm", choices=["claude", "gemini", "both"], default="both"
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -65,97 +172,16 @@ def main():
     llm = LLMChoice(args.llm)
 
     if not args.quiet:
-        print(f"Lens: {lens} | Repos: {', '.join(r['name'] for r in repos)} | LLM: {args.llm}")
+        repo_names = ", ".join(r["name"] for r in repos)
+        print(f"Lens: {lens} | Repos: {repo_names} | LLM: {args.llm}")
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     digest_data = []
 
     for repo_config in repos:
-        name = repo_config["name"]
-        repo_path = repo_config["path"]
-
-        if not repo_path.exists():
-            if not args.quiet:
-                print(f"  {name}: path not found, skipping")
-            continue
-
-        if not args.quiet:
-            print(f"\n{'=' * 40}")
-            print(f"  {name}")
-            print(f"{'=' * 40}")
-            print("  Static scan...")
-
-        scan_results = scan_repo(repo_config)
-
-        current_files = set()
-        for sr in scan_results:
-            db.upsert_file(name, sr["path"], sr["hash"], sr["complexity"], sr["issues"])
-            current_files.add(sr["path"])
-        db.cleanup_removed(name, current_files)
-
-        if args.full:
-            candidates = db.get_all_files(name)
-        else:
-            candidates = db.get_candidates(name, lens=lens)
-
-        if not candidates:
-            if not args.quiet:
-                print(f"  No candidates for {lens} lens")
-            continue
-
-        if not args.quiet:
-            print(f"  Candidates: {len(candidates)} files")
-
-        if args.dry_run:
-            for c in candidates:
-                print(f"    {c['path']} (complexity={c['complexity']}, issues={c['static_issues']})")
-            continue
-
-        if not args.quiet:
-            print("  Reviewing...")
-
-        all_findings = review_batch(
-            repo_config=repo_config,
-            candidates=candidates,
-            lens=lens,
-            llm=llm,
-            quiet=args.quiet,
-        )
-
-        for c in candidates:
-            file_findings = [
-                f
-                for f in all_findings
-                if f.get("file", "").endswith(c["path"]) or f.get("file") == c["path"]
-            ]
-            db.mark_reviewed(name, c["path"], lens=lens, findings_count=len(file_findings))
-
-        stats = db.get_repo_stats(name)
-        report = generate_repo_report(
-            repo_name=name,
-            lens=lens,
-            findings=all_findings,
-            files_reviewed=len(candidates),
-            files_total=stats["total_files"],
-        )
-
-        report_dir = VAULT_DIR / date_str
-        report_dir.mkdir(parents=True, exist_ok=True)
-        report_path = report_dir / f"{name}.md"
-        report_path.write_text(report)
-
-        if not args.quiet:
-            print(f"  Report: {report_path}")
-            print(f"  Findings: {len(all_findings)}")
-
-        digest_data.append(
-            {
-                "repo": name,
-                "findings": len(all_findings),
-                "critical": len([f for f in all_findings if f.get("severity") == "critical"]),
-                "files_reviewed": len(candidates),
-            }
-        )
+        entry = run_repo_audit(repo_config, db, lens, llm, args, date_str)
+        if entry:
+            digest_data.append(entry)
 
     if digest_data and not args.dry_run:
         digest = generate_digest(lens=lens, repo_summaries=digest_data)

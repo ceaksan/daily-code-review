@@ -1,6 +1,7 @@
 """Dual-LLM reviewer using Claude and Gemini CLI headless modes."""
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -14,6 +15,11 @@ from config import (
     MAX_FILES_PER_BATCH,
     PROMPTS_DIR,
 )
+
+logger = logging.getLogger(__name__)
+
+LLM_TIMEOUT = 300
+DEFAULT_GROUP_DEPTH = 2
 
 
 class LLMChoice:
@@ -50,18 +56,19 @@ def parse_findings(raw: str) -> list[dict]:
     return []
 
 
-def group_by_directory(files: list[dict], depth: int = 2) -> dict[str, list[dict]]:
+def group_by_directory(
+    files: list[dict], depth: int = DEFAULT_GROUP_DEPTH
+) -> dict[str, list[dict]]:
     """Group files by parent directory up to given depth."""
     groups: dict[str, list[dict]] = defaultdict(list)
     for f in files:
         parts = Path(f["path"]).parts
-        key = (
-            str(Path(*parts[:depth]))
-            if len(parts) > depth
-            else str(Path(*parts[:-1]))
-            if len(parts) > 1
-            else str(parts[0])
-        )
+        if len(parts) > depth:
+            key = str(Path(*parts[:depth]))
+        elif len(parts) > 1:
+            key = str(Path(*parts[:-1]))
+        else:
+            key = str(parts[0])
         groups[key].append(f)
     return dict(groups)
 
@@ -124,47 +131,41 @@ def call_llm(cmd: str, prompt: str, quiet: bool = False) -> str:
             args,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=LLM_TIMEOUT,
             env=env,
         )
         return result.stdout
     except FileNotFoundError:
+        logger.warning("LLM CLI not found: %s", cmd)
         return ""
     except subprocess.TimeoutExpired:
+        logger.warning("LLM timed out after %ds: %s", LLM_TIMEOUT, cmd)
         return ""
 
 
-def review_batch(
-    repo_config: dict,
-    candidates: list[dict],
-    lens: str,
-    llm: LLMChoice,
-    quiet: bool = False,
-) -> list[dict]:
-    """Main entry point: review a batch of files with selected LLMs."""
-    # Load prompts
+def _load_prompts(lens: str) -> str:
+    """Load and combine base + lens-specific prompts."""
     lens_path = PROMPTS_DIR / f"lens-{lens}.md"
     base_path = PROMPTS_DIR / "system-base.md"
-
     lens_text = lens_path.read_text() if lens_path.exists() else ""
     base_text = base_path.read_text() if base_path.exists() else ""
+    return f"{base_text}\n\n{lens_text}".strip()
 
-    full_lens = f"{base_text}\n\n{lens_text}".strip()
 
-    # Load architecture doc
-    arch_doc = ""
+def _load_architecture(repo_config: dict) -> str:
+    """Load repo's architecture doc if available."""
     repo_path = Path(repo_config["path"])
     arch_rel = repo_config.get("architecture", "")
     if arch_rel:
         arch_path = repo_path / arch_rel
         if arch_path.exists():
-            arch_doc = arch_path.read_text()
+            return arch_path.read_text()
+    return ""
 
-    # Group and batch
+
+def _build_batches(candidates: list[dict]) -> list[list[dict]]:
+    """Group candidates by directory and split into batches."""
     groups = group_by_directory(candidates)
-    all_findings: list[dict] = []
-
-    # Flatten groups into batches of MAX_FILES_PER_BATCH
     batched: list[list[dict]] = []
     current_batch: list[dict] = []
     for group_files in groups.values():
@@ -175,7 +176,23 @@ def review_batch(
                 current_batch = []
     if current_batch:
         batched.append(current_batch)
+    return batched
 
+
+def review_batch(
+    repo_config: dict,
+    candidates: list[dict],
+    lens: str,
+    llm: LLMChoice,
+    quiet: bool = False,
+) -> list[dict]:
+    """Main entry point: review a batch of files with selected LLMs."""
+    full_lens = _load_prompts(lens)
+    arch_doc = _load_architecture(repo_config)
+    repo_path = Path(repo_config["path"])
+    batched = _build_batches(candidates)
+
+    all_findings: list[dict] = []
     for batch in batched:
         file_paths = [f["path"] for f in batch]
         contents = read_file_contents(repo_path, file_paths)
