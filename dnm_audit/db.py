@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import DAILY_FILE_BUDGET
+from dnm_audit.config import DAILY_FILE_BUDGET
 
 ISSUE_WEIGHT = 10
 

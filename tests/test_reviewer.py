@@ -1,12 +1,9 @@
 """Tests for lib/reviewer.py"""
 
 import json
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
-
-from reviewer import build_prompt, group_by_directory, parse_findings
+from dnm_audit.reviewer import build_prompt, group_by_directory, parse_findings
 
 
 class TestParseFindings:

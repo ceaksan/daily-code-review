@@ -8,7 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from config import ESLINT_CMD, REVIEWABLE_EXTENSIONS, RUFF_SELECT
+from dnm_audit.config import ESLINT_CMD, REVIEWABLE_EXTENSIONS, RUFF_SELECT
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from config import (
+from dnm_audit.config import (
     CLAUDE_CMD,
     GEMINI_CMD,
     MAX_CHARS_PER_BATCH,

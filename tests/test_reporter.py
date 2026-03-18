@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
-
-from reporter import severity_label, generate_repo_report, generate_digest
+from dnm_audit.reporter import severity_label, generate_repo_report, generate_digest
 
 
 def test_severity_label():

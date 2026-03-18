@@ -1,12 +1,9 @@
 """Tests for lib/scanner.py"""
 
 import json
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
-
-from scanner import (
+from dnm_audit.scanner import (
     discover_files,
     file_hash,
     parse_radon_output,
@@ -74,7 +71,7 @@ class TestParseRadonOutput:
 class TestParseRuffOutput:
     def test_ruff_select_flag_in_command(self, monkeypatch, tmp_path):
         """Verify run_tool receives --select flag when RUFF_SELECT is set."""
-        import scanner
+        from dnm_audit import scanner
 
         calls = []
 
@@ -112,7 +109,7 @@ class TestParseRuffOutput:
 
 class TestParseEslintOutput:
     def test_parses_json_output(self):
-        from scanner import parse_eslint_output
+        from dnm_audit.scanner import parse_eslint_output
 
         raw = json.dumps(
             [
@@ -125,13 +122,13 @@ class TestParseEslintOutput:
         assert result["src/utils.ts"] == 1
 
     def test_empty_json_array(self):
-        from scanner import parse_eslint_output
+        from dnm_audit.scanner import parse_eslint_output
 
         result = parse_eslint_output("[]")
         assert result == {}
 
     def test_invalid_json(self):
-        from scanner import parse_eslint_output
+        from dnm_audit.scanner import parse_eslint_output
 
         result = parse_eslint_output("not json")
         assert result == {}
