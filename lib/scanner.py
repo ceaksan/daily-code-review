@@ -119,12 +119,14 @@ def scan_repo(repo_config: dict) -> list[dict]:
     results: list[dict] = []
     for f in files:
         rel = str(f.relative_to(repo_path))
+        abs_key = str(f)
         results.append(
             {
                 "path": rel,
                 "hash": file_hash(f),
-                "complexity": complexity_map.get(rel, 0),
-                "issues": issues_map.get(rel, 0),
+                "complexity": complexity_map.get(rel, 0)
+                or complexity_map.get(abs_key, 0),
+                "issues": issues_map.get(rel, 0) or issues_map.get(abs_key, 0),
             }
         )
 
