@@ -34,17 +34,20 @@ def get_todays_lens() -> str | None:
     return LENS_SCHEDULE.get(weekday)
 
 
-def run_repo_audit(repo_config, db, lens, llm, args, date_str):
+def run_repo_audit(
+    repo_config, db, lens, llm, date_str,
+    *, quiet=False, full=False, dry_run=False,
+):
     """Run audit pipeline for a single repo. Returns digest entry or None."""
     name = repo_config["name"]
     repo_path = repo_config["path"]
 
     if not repo_path.exists():
-        if not args.quiet:
+        if not quiet:
             print(f"  {name}: path not found, skipping")
         return None
 
-    if not args.quiet:
+    if not quiet:
         print(f"\n{'=' * SEPARATOR_WIDTH}")
         print(f"  {name}")
         print(f"{'=' * SEPARATOR_WIDTH}")
@@ -60,20 +63,20 @@ def run_repo_audit(repo_config, db, lens, llm, args, date_str):
         current_files.add(sr["path"])
     db.cleanup_removed(name, current_files)
 
-    if args.full:
+    if full:
         candidates = db.get_all_files(name)
     else:
         candidates = db.get_candidates(name, lens=lens)
 
     if not candidates:
-        if not args.quiet:
+        if not quiet:
             print(f"  No candidates for {lens} lens")
         return None
 
-    if not args.quiet:
+    if not quiet:
         print(f"  Candidates: {len(candidates)} files")
 
-    if args.dry_run:
+    if dry_run:
         for c in candidates:
             print(
                 f"    {c['path']}"
@@ -82,7 +85,7 @@ def run_repo_audit(repo_config, db, lens, llm, args, date_str):
             )
         return None
 
-    if not args.quiet:
+    if not quiet:
         print("  Reviewing...")
 
     all_findings = review_batch(
@@ -90,7 +93,7 @@ def run_repo_audit(repo_config, db, lens, llm, args, date_str):
         candidates=candidates,
         lens=lens,
         llm=llm,
-        quiet=args.quiet,
+        quiet=quiet,
     )
 
     for c in candidates:
@@ -118,7 +121,7 @@ def run_repo_audit(repo_config, db, lens, llm, args, date_str):
     report_path = report_dir / f"{name}.md"
     report_path.write_text(report)
 
-    if not args.quiet:
+    if not quiet:
         print(f"  Report: {report_path}")
         print(f"  Findings: {len(all_findings)}")
 
@@ -179,7 +182,10 @@ def main():
     digest_data = []
 
     for repo_config in repos:
-        entry = run_repo_audit(repo_config, db, lens, llm, args, date_str)
+        entry = run_repo_audit(
+            repo_config, db, lens, llm, date_str,
+            quiet=args.quiet, full=args.full, dry_run=args.dry_run,
+        )
         if entry:
             digest_data.append(entry)
 
