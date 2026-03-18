@@ -15,6 +15,7 @@ GEMINI_CMD = "gemini"
 # Static tools
 RUFF_CMD = "ruff"
 RADON_CMD = "radon"
+ESLINT_CMD = "eslint"
 
 # Ruff rule selection (comma-separated rule codes)
 # E=pycodestyle, F=pyflakes, I=isort, UP=pyupgrade, B=flake8-bugbear, SIM=flake8-simplify

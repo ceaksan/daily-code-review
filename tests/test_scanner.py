@@ -1,5 +1,6 @@
 """Tests for lib/scanner.py"""
 
+import json
 import sys
 from pathlib import Path
 
@@ -107,3 +108,30 @@ class TestParseRuffOutput:
         result = parse_ruff_output(raw)
         assert result["src/app.py"] == 2
         assert result["src/utils.py"] == 1
+
+
+class TestParseEslintOutput:
+    def test_parses_json_output(self):
+        from scanner import parse_eslint_output
+
+        raw = json.dumps(
+            [
+                {"filePath": "src/app.ts", "errorCount": 2, "warningCount": 3},
+                {"filePath": "src/utils.ts", "errorCount": 0, "warningCount": 1},
+            ]
+        )
+        result = parse_eslint_output(raw)
+        assert result["src/app.ts"] == 5
+        assert result["src/utils.ts"] == 1
+
+    def test_empty_json_array(self):
+        from scanner import parse_eslint_output
+
+        result = parse_eslint_output("[]")
+        assert result == {}
+
+    def test_invalid_json(self):
+        from scanner import parse_eslint_output
+
+        result = parse_eslint_output("not json")
+        assert result == {}

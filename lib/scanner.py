@@ -2,12 +2,13 @@
 
 import fnmatch
 import hashlib
+import json
 import logging
 import re
 import subprocess
 from pathlib import Path
 
-from config import REVIEWABLE_EXTENSIONS, RUFF_SELECT
+from config import ESLINT_CMD, REVIEWABLE_EXTENSIONS, RUFF_SELECT
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,21 @@ def parse_ruff_output(raw: str) -> dict[str, int]:
     return result
 
 
+def parse_eslint_output(raw: str) -> dict[str, int]:
+    """Parse eslint --format json output, return {filepath: error+warning count}."""
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    result: dict[str, int] = {}
+    for entry in entries:
+        fp = entry.get("filePath", "")
+        count = entry.get("errorCount", 0) + entry.get("warningCount", 0)
+        if fp and count > 0:
+            result[fp] = count
+    return result
+
+
 def run_tool(cmd: list[str], cwd: Path) -> str:
     """Run subprocess, return stdout+stderr. Logs warnings on failure."""
     try:
@@ -132,6 +148,22 @@ def scan_repo(repo_config: dict) -> list[dict]:
             ]
             ruff_raw = run_tool(ruff_cmd + py_files, cwd=repo_path)
             issues_map = parse_ruff_output(ruff_raw)
+
+    if any(lang in languages for lang in ("typescript", "javascript")):
+        ts_exts = {".ts", ".tsx", ".js", ".jsx"}
+        ts_files = [str(f.relative_to(repo_path)) for f in files if f.suffix in ts_exts]
+        if ts_files:
+            eslint_raw = run_tool(
+                [ESLINT_CMD, "--format", "json"] + ts_files,
+                cwd=repo_path,
+            )
+            eslint_map = parse_eslint_output(eslint_raw)
+            for fp, count in eslint_map.items():
+                try:
+                    rel = str(Path(fp).relative_to(repo_path))
+                except ValueError:
+                    rel = fp
+                issues_map[rel] = issues_map.get(rel, 0) + count
 
     results: list[dict] = []
     for f in files:
