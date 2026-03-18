@@ -2,7 +2,6 @@
 
 import fnmatch
 import hashlib
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -96,14 +95,6 @@ def run_tool(cmd: list[str], cwd: Path) -> str:
         return ""
 
 
-def _normalize_keys(mapping: dict[str, int], repo_path: Path) -> dict[str, int]:
-    """Convert absolute path keys to relative paths."""
-    return {
-        os.path.relpath(k, repo_path) if os.path.isabs(k) else k: v
-        for k, v in mapping.items()
-    }
-
-
 def scan_repo(repo_config: dict) -> list[dict]:
     """Discover files, run radon+ruff for python repos, return file info dicts."""
     repo_path = Path(repo_config["path"])
@@ -117,13 +108,13 @@ def scan_repo(repo_config: dict) -> list[dict]:
     issues_map: dict[str, int] = {}
 
     if "python" in languages:
-        py_files = [str(f) for f in files if f.suffix == ".py"]
+        py_files = [str(f.relative_to(repo_path)) for f in files if f.suffix == ".py"]
         if py_files:
             radon_raw = run_tool(["radon", "cc", "-s"] + py_files, cwd=repo_path)
-            complexity_map = _normalize_keys(parse_radon_output(radon_raw), repo_path)
+            complexity_map = parse_radon_output(radon_raw)
 
             ruff_raw = run_tool(["ruff", "check"] + py_files, cwd=repo_path)
-            issues_map = _normalize_keys(parse_ruff_output(ruff_raw), repo_path)
+            issues_map = parse_ruff_output(ruff_raw)
 
     results: list[dict] = []
     for f in files:
