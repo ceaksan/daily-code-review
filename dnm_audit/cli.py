@@ -19,7 +19,11 @@ from dnm_audit.config import REPOS, LENS_SCHEDULE, VAULT_DIR, DB_PATH
 from dnm_audit.db import HealthDB
 from dnm_audit.scanner import scan_repo
 from dnm_audit.reviewer import review_batch, LLMChoice
-from dnm_audit.reporter import generate_repo_report, generate_digest
+from dnm_audit.reporter import (
+    generate_repo_report,
+    generate_digest,
+    generate_trends_report,
+)
 
 SEPARATOR_WIDTH = 40
 
@@ -122,6 +126,8 @@ def run_repo_audit(
         print(f"  Report: {report_path}")
         print(f"  Findings: {len(all_findings)}")
 
+    db.insert_history(name, lens, len(all_findings), len(candidates))
+
     return {
         "repo": name,
         "findings": len(all_findings),
@@ -146,13 +152,12 @@ def main():
     )
     parser.add_argument("--llm", choices=["claude", "gemini", "both"], default="both")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--trends",
+        action="store_true",
+        help="Show finding trends for last 14 runs per repo",
+    )
     args = parser.parse_args()
-
-    lens = args.lens or get_todays_lens()
-    if lens is None:
-        if not args.quiet:
-            print("Weekend. Use --lens to override.")
-        return
 
     repos = REPOS
     if args.repo:
@@ -160,6 +165,20 @@ def main():
         if not repos:
             print(f"Unknown repo: {args.repo}")
             return
+
+    if args.trends:
+        db = HealthDB(DB_PATH)
+        for repo_config in repos:
+            trends = db.get_trends(repo_config["name"])
+            if trends:
+                print(generate_trends_report(repo_config["name"], trends))
+        return
+
+    lens = args.lens or get_todays_lens()
+    if lens is None:
+        if not args.quiet:
+            print("Weekend. Use --lens to override.")
+        return
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     VAULT_DIR.mkdir(parents=True, exist_ok=True)

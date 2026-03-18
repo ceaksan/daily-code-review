@@ -77,3 +77,29 @@ def test_digest():
     assert "| alpha | 3 | 1 | 10 |" in digest
     assert "| beta | 0 | 0 | 5 |" in digest
     assert "| Repo | Findings | Critical | Files |" in digest
+
+
+def test_trends_report():
+    from dnm_audit.reporter import generate_trends_report
+
+    trends = [
+        {
+            "repo": "my-app",
+            "lens": "complexity",
+            "run_date": "2026-03-18T09:00:00",
+            "findings_count": 5,
+            "files_reviewed": 15,
+        },
+        {
+            "repo": "my-app",
+            "lens": "duplication",
+            "run_date": "2026-03-17T09:00:00",
+            "findings_count": 3,
+            "files_reviewed": 12,
+        },
+    ]
+    report = generate_trends_report("my-app", trends)
+    assert "my-app" in report
+    assert "complexity" in report
+    assert "| 5 |" in report
+    assert "| 3 |" in report

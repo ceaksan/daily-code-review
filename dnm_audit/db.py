@@ -31,6 +31,22 @@ CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_repo_complexity ON file_health (repo, complexity DESC)",
 ]
 
+CREATE_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS review_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    lens TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    findings_count INTEGER NOT NULL,
+    files_reviewed INTEGER NOT NULL
+)
+"""
+
+CREATE_HISTORY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_history_repo_date"
+    " ON review_history (repo, run_date DESC)"
+)
+
 
 class HealthDB:
     def __init__(self, db_path: Path):
@@ -44,6 +60,8 @@ class HealthDB:
         self._conn.execute(CREATE_TABLE)
         for idx in CREATE_INDEXES:
             self._conn.execute(idx)
+        self._conn.execute(CREATE_HISTORY_TABLE)
+        self._conn.execute(CREATE_HISTORY_INDEX)
         self._conn.commit()
 
     def upsert_file(
@@ -146,6 +164,29 @@ class HealthDB:
                 [repo, *removed],
             )
             self._conn.commit()
+
+    def insert_history(
+        self, repo: str, lens: str, findings_count: int, files_reviewed: int
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO review_history
+               (repo, lens, run_date, findings_count, files_reviewed)
+               VALUES (?, ?, ?, ?, ?)""",
+            (repo, lens, now, findings_count, files_reviewed),
+        )
+        self._conn.commit()
+
+    def get_trends(self, repo: str, limit: int = 14) -> list[dict]:
+        cur = self._conn.execute(
+            """SELECT repo, lens, run_date, findings_count, files_reviewed
+               FROM review_history
+               WHERE repo = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            (repo, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     def get_repo_stats(self, repo: str) -> dict:
         cur = self._conn.execute(

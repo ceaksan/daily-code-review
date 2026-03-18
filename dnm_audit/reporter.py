@@ -92,3 +92,18 @@ def generate_digest(lens: str, repo_summaries: list[dict]) -> str:
         )
 
     return "\n".join(lines) + "\n"
+
+
+def generate_trends_report(repo_name: str, trends: list[dict]) -> str:
+    lines = [
+        f"# Trends: {repo_name}",
+        "",
+        "| Date | Lens | Findings | Files |",
+        "| --- | --- | --- | --- |",
+    ]
+    for t in trends:
+        date = t["run_date"][:10]
+        lines.append(
+            f"| {date} | {t['lens']} | {t['findings_count']} | {t['files_reviewed']} |"
+        )
+    return "\n".join(lines) + "\n"

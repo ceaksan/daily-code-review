@@ -149,3 +149,24 @@ def test_repo_stats(tmp_path):
     assert stats["clean_files"] == 1
     assert stats["dirty_files"] == 1
     assert stats["avg_complexity"] == 6.0
+
+
+def test_insert_history(tmp_path):
+    db = _make_db(tmp_path)
+    db.insert_history("repo1", "complexity", 5, 15)
+    db.insert_history("repo1", "architecture", 3, 12)
+
+    rows = db.get_trends("repo1")
+    assert len(rows) == 2
+    lenses = {r["lens"] for r in rows}
+    assert "complexity" in lenses
+    assert "architecture" in lenses
+
+
+def test_get_trends_limit(tmp_path):
+    db = _make_db(tmp_path)
+    for i in range(20):
+        db.insert_history("repo1", "complexity", i, 10)
+
+    rows = db.get_trends("repo1", limit=7)
+    assert len(rows) == 7
