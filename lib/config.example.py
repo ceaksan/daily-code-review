@@ -16,6 +16,10 @@ GEMINI_CMD = "gemini"
 RUFF_CMD = "ruff"
 RADON_CMD = "radon"
 
+# Ruff rule selection (comma-separated rule codes)
+# E=pycodestyle, F=pyflakes, I=isort, UP=pyupgrade, B=flake8-bugbear, SIM=flake8-simplify
+RUFF_SELECT = "E,F,I,UP,B,SIM"
+
 # Review settings
 DAILY_FILE_BUDGET = 15
 MAX_FILES_PER_BATCH = 5

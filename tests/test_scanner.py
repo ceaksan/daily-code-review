@@ -71,6 +71,33 @@ class TestParseRadonOutput:
 
 
 class TestParseRuffOutput:
+    def test_ruff_select_flag_in_command(self, monkeypatch, tmp_path):
+        """Verify run_tool receives --select flag when RUFF_SELECT is set."""
+        import scanner
+
+        calls = []
+
+        def fake_run_tool(cmd, cwd):
+            calls.append(cmd)
+            return ""
+
+        monkeypatch.setattr(scanner, "run_tool", fake_run_tool)
+        monkeypatch.setattr(scanner, "RUFF_SELECT", "E,F,I,UP,B,SIM")
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("x = 1\n")
+
+        scanner.scan_repo(
+            {
+                "path": str(tmp_path),
+                "source_dirs": ["src/"],
+                "ignore_dirs": [],
+                "languages": ["python"],
+            }
+        )
+        ruff_calls = [c for c in calls if "ruff" in c[0]]
+        assert any("--select" in c for c in ruff_calls)
+
     def test_parses_issue_count(self):
         raw = (
             "src/app.py:10:1: E501 Line too long\n"

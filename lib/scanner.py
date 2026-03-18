@@ -7,7 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from config import REVIEWABLE_EXTENSIONS
+from config import REVIEWABLE_EXTENSIONS, RUFF_SELECT
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,15 @@ def scan_repo(repo_config: dict) -> list[dict]:
             radon_raw = run_tool(["radon", "cc", "-s"] + py_files, cwd=repo_path)
             complexity_map = parse_radon_output(radon_raw)
 
-            ruff_raw = run_tool(["ruff", "check"] + py_files, cwd=repo_path)
+            ruff_cmd = [
+                "ruff",
+                "check",
+                "--output-format",
+                "concise",
+                "--select",
+                RUFF_SELECT,
+            ]
+            ruff_raw = run_tool(ruff_cmd + py_files, cwd=repo_path)
             issues_map = parse_ruff_output(ruff_raw)
 
     results: list[dict] = []
