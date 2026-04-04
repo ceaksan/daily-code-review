@@ -1,5 +1,6 @@
 """SQLite state tracking for file health."""
 
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,53 @@ CREATE_HISTORY_INDEX = (
     " ON review_history (repo, run_date DESC)"
 )
 
+CREATE_ESCALATIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    lens TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    gemma_severity TEXT NOT NULL,
+    gemma_confidence REAL,
+    gemma_title TEXT NOT NULL,
+    gemma_detail TEXT,
+    opus_verdict TEXT,
+    opus_severity TEXT,
+    opus_detail TEXT,
+    was_true_positive INTEGER,
+    gemma_category TEXT DEFAULT ''
+)
+"""
+
+CREATE_ESCALATIONS_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_escalations_repo_lens"
+    " ON escalations (repo, lens, run_date DESC)"
+)
+
+CREATE_ESCALATIONS_CATEGORY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_escalations_category"
+    " ON escalations (gemma_category, run_date DESC)"
+)
+
+CREATE_REVIEW_SOURCES_TABLE = """
+CREATE TABLE IF NOT EXISTS review_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    lens TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    llm_source TEXT NOT NULL,
+    findings_count INTEGER DEFAULT 0,
+    response_time_ms INTEGER
+)
+"""
+
+CREATE_REVIEW_SOURCES_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_review_sources_repo"
+    " ON review_sources (repo, llm_source, run_date DESC)"
+)
+
 
 class HealthDB:
     def __init__(self, db_path: Path):
@@ -62,6 +110,18 @@ class HealthDB:
             self._conn.execute(idx)
         self._conn.execute(CREATE_HISTORY_TABLE)
         self._conn.execute(CREATE_HISTORY_INDEX)
+        self._conn.execute(CREATE_ESCALATIONS_TABLE)
+        self._conn.execute(CREATE_ESCALATIONS_INDEX)
+        self._conn.execute(CREATE_ESCALATIONS_CATEGORY_INDEX)
+        self._conn.execute(CREATE_REVIEW_SOURCES_TABLE)
+        self._conn.execute(CREATE_REVIEW_SOURCES_INDEX)
+        # Migration: add gemma_category column to existing escalations tables
+        try:
+            self._conn.execute(
+                "ALTER TABLE escalations ADD COLUMN gemma_category TEXT DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
 
     def upsert_file(
@@ -200,4 +260,165 @@ class HealthDB:
             (repo,),
         )
         row = dict(cur.fetchone())
+        return row
+
+    # --- Escalation tracking ---
+
+    def insert_escalation(
+        self,
+        repo: str,
+        path: str,
+        lens: str,
+        gemma_finding: dict,
+        opus_result: dict,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        verdict = opus_result.get("opus_verdict", "error")
+        was_tp = (
+            1 if verdict == "confirmed" else (0 if verdict == "dismissed" else None)
+        )
+        self._conn.execute(
+            """INSERT INTO escalations
+               (repo, path, lens, run_date, gemma_severity, gemma_confidence,
+                gemma_title, gemma_detail, opus_verdict, opus_severity,
+                opus_detail, was_true_positive, gemma_category)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                repo,
+                path,
+                lens,
+                now,
+                gemma_finding.get("severity", ""),
+                gemma_finding.get("confidence", 0.0),
+                gemma_finding.get("title", ""),
+                gemma_finding.get("detail", ""),
+                verdict,
+                opus_result.get("opus_severity", ""),
+                opus_result.get("opus_detail", ""),
+                was_tp,
+                gemma_finding.get("category", ""),
+            ),
+        )
+        self._conn.commit()
+
+    def insert_review_source(
+        self,
+        repo: str,
+        path: str,
+        lens: str,
+        llm_source: str,
+        findings_count: int,
+        response_time_ms: int = 0,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO review_sources
+               (repo, path, lens, run_date, llm_source, findings_count, response_time_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (repo, path, lens, now, llm_source, findings_count, response_time_ms),
+        )
+        self._conn.commit()
+
+    def get_escalation_stats(
+        self, repo: str | None = None, lens: str | None = None, days: int = 30
+    ) -> dict:
+        conditions = ["run_date >= date('now', ?  || ' days')"]
+        params: list = [f"-{days}"]
+        if repo:
+            conditions.append("repo = ?")
+            params.append(repo)
+        if lens:
+            conditions.append("lens = ?")
+            params.append(lens)
+        where = " AND ".join(conditions)
+        cur = self._conn.execute(
+            f"""SELECT
+                 COUNT(*) as total,
+                 SUM(CASE WHEN was_true_positive = 1 THEN 1 ELSE 0 END) as confirmed,
+                 SUM(CASE WHEN was_true_positive = 0 THEN 1 ELSE 0 END) as dismissed,
+                 SUM(CASE WHEN was_true_positive IS NULL THEN 1 ELSE 0 END) as downgraded
+               FROM escalations
+               WHERE {where}""",
+            params,
+        )
+        row = dict(cur.fetchone())
+        total = row["total"] or 0
+        row["false_positive_rate"] = (
+            round(row["dismissed"] / total, 2) if total > 0 else 0.0
+        )
+        return row
+
+    def get_false_positive_rate_by_lens(self, days: int = 30) -> dict[str, dict]:
+        cur = self._conn.execute(
+            """SELECT lens,
+                 COUNT(*) as total,
+                 SUM(CASE WHEN was_true_positive = 1 THEN 1 ELSE 0 END) as confirmed,
+                 SUM(CASE WHEN was_true_positive = 0 THEN 1 ELSE 0 END) as dismissed
+               FROM escalations
+               WHERE run_date >= date('now', ? || ' days')
+               GROUP BY lens""",
+            (f"-{days}",),
+        )
+        result = {}
+        for row in cur.fetchall():
+            row = dict(row)
+            total = row["total"]
+            result[row["lens"]] = {
+                "total": total,
+                "confirmed": row["confirmed"],
+                "dismissed": row["dismissed"],
+                "false_positive_rate": round(row["dismissed"] / total, 2)
+                if total > 0
+                else 0.0,
+            }
+        return result
+
+    # --- Adaptive escalation queries (MBU) ---
+
+    def get_category_accuracy(
+        self, category: str, lens: str | None = None, days: int = 60
+    ) -> dict:
+        """Get true-positive rate for a specific finding category."""
+        conditions = [
+            "gemma_category = ?",
+            "run_date >= date('now', ? || ' days')",
+        ]
+        params: list = [category, f"-{days}"]
+        if lens:
+            conditions.append("lens = ?")
+            params.append(lens)
+        where = " AND ".join(conditions)
+        cur = self._conn.execute(
+            f"""SELECT
+                 COUNT(*) as total,
+                 SUM(CASE WHEN was_true_positive = 1 THEN 1 ELSE 0 END) as confirmed,
+                 SUM(CASE WHEN was_true_positive = 0 THEN 1 ELSE 0 END) as dismissed
+               FROM escalations
+               WHERE {where}""",
+            params,
+        )
+        row = dict(cur.fetchone())
+        row["total"] = row["total"] or 0
+        row["confirmed"] = row["confirmed"] or 0
+        row["dismissed"] = row["dismissed"] or 0
+        return row
+
+    def get_confidence_stats(self, category: str, days: int = 30) -> dict:
+        """Get mean and std of Gemma confidence for a category."""
+        cur = self._conn.execute(
+            """SELECT
+                 COUNT(*) as count,
+                 AVG(gemma_confidence) as mean_confidence,
+                 AVG(gemma_confidence * gemma_confidence)
+                   - AVG(gemma_confidence) * AVG(gemma_confidence) as variance
+               FROM escalations
+               WHERE gemma_category = ?
+                 AND run_date >= date('now', ? || ' days')""",
+            (category, f"-{days}"),
+        )
+        row = dict(cur.fetchone())
+        row["count"] = row["count"] or 0
+        row["mean_confidence"] = row["mean_confidence"] or 0.0
+        row["std_confidence"] = math.sqrt(max(row.get("variance") or 0, 0))
+        del row["variance"]
         return row

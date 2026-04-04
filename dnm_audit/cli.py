@@ -18,7 +18,7 @@ from datetime import datetime
 from dnm_audit.config import REPOS, LENS_SCHEDULE, VAULT_DIR, DB_PATH
 from dnm_audit.db import HealthDB
 from dnm_audit.scanner import scan_repo
-from dnm_audit.reviewer import review_batch, LLMChoice
+from dnm_audit.reviewer import review_batch, check_ollama_health, LLMChoice
 from dnm_audit.reporter import (
     generate_repo_report,
     generate_digest,
@@ -98,6 +98,7 @@ def run_repo_audit(
         lens=lens,
         llm=llm,
         quiet=quiet,
+        db=db,
     )
 
     for c in candidates:
@@ -128,11 +129,18 @@ def run_repo_audit(
 
     db.insert_history(name, lens, len(all_findings), len(candidates))
 
+    # Track escalations
+    escalations = [f for f in all_findings if f.get("_escalation")]
+    escalation_count = len(escalations)
+    confirmed = len([e for e in escalations if e.get("opus_verdict") == "confirmed"])
+
     return {
         "repo": name,
         "findings": len(all_findings),
         "critical": len([f for f in all_findings if f.get("severity") == "critical"]),
         "files_reviewed": len(candidates),
+        "escalations": escalation_count,
+        "escalations_confirmed": confirmed,
     }
 
 
@@ -150,7 +158,16 @@ def main():
     parser.add_argument(
         "--dry-run", action="store_true", help="Show plan without executing"
     )
-    parser.add_argument("--llm", choices=["claude", "gemini", "both"], default="both")
+    parser.add_argument(
+        "--llm",
+        choices=["claude", "gemini", "both", "gemma", "gemma+opus", "all"],
+        default="both",
+    )
+    parser.add_argument(
+        "--ollama-check",
+        action="store_true",
+        help="Check Ollama connectivity and exit",
+    )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--trends",
@@ -165,6 +182,16 @@ def main():
         if not repos:
             print(f"Unknown repo: {args.repo}")
             return
+
+    if args.ollama_check:
+        from dnm_audit.config import OLLAMA_BASE_URL, OLLAMA_MODEL
+
+        ok = check_ollama_health()
+        if ok:
+            print(f"Ollama OK: {OLLAMA_BASE_URL} (model: {OLLAMA_MODEL})")
+        else:
+            print(f"Ollama unreachable: {OLLAMA_BASE_URL}")
+        return
 
     if args.trends:
         db = HealthDB(DB_PATH)
@@ -184,11 +211,21 @@ def main():
     VAULT_DIR.mkdir(parents=True, exist_ok=True)
 
     db = HealthDB(DB_PATH)
-    llm = LLMChoice(args.llm)
+
+    # Gemma fallback: check Ollama before starting
+    effective_llm = args.llm
+    if args.llm in ("gemma", "gemma+opus", "all"):
+        if not check_ollama_health():
+            fallback = {"gemma": "claude", "gemma+opus": "claude", "all": "both"}
+            effective_llm = fallback[args.llm]
+            if not args.quiet:
+                print(f"  Ollama unreachable, falling back to --llm {effective_llm}")
+
+    llm = LLMChoice(effective_llm)
 
     if not args.quiet:
         repo_names = ", ".join(r["name"] for r in repos)
-        print(f"Lens: {lens} | Repos: {repo_names} | LLM: {args.llm}")
+        print(f"Lens: {lens} | Repos: {repo_names} | LLM: {effective_llm}")
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     digest_data = []

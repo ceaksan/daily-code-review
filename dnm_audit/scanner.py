@@ -9,7 +9,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from dnm_audit.config import ESLINT_CMD, REVIEWABLE_EXTENSIONS, RUFF_SELECT
+from dnm_audit.config import REVIEWABLE_EXTENSIONS, RUFF_SELECT
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +155,10 @@ def scan_repo(repo_config: dict) -> list[dict]:
     if any(lang in languages for lang in ("typescript", "javascript")):
         ts_exts = {".ts", ".tsx", ".js", ".jsx"}
         ts_files = [str(f.relative_to(repo_path)) for f in files if f.suffix in ts_exts]
-        if ts_files:
+        local_eslint = repo_path / "node_modules" / ".bin" / "eslint"
+        if ts_files and local_eslint.exists():
             eslint_raw = run_tool(
-                [ESLINT_CMD, "--format", "json"] + ts_files,
+                [str(local_eslint), "--format", "json"] + ts_files,
                 cwd=repo_path,
             )
             eslint_map = parse_eslint_output(eslint_raw)

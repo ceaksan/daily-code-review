@@ -3,7 +3,14 @@
 import json
 from pathlib import Path
 
-from dnm_audit.reviewer import build_prompt, group_by_directory, parse_findings
+from dnm_audit.reviewer import (
+    LLMChoice,
+    build_prompt,
+    group_by_directory,
+    parse_findings,
+    parse_opus_verdict,
+    should_escalate,
+)
 
 
 class TestParseFindings:
@@ -73,3 +80,76 @@ class TestGroupByDirectory:
         assert "src/utils" in groups
         assert len(groups["src/utils"]) == 1
         assert "lib" in groups or "lib/core.py" in str(groups)
+
+
+class TestLLMChoice:
+    def test_both(self):
+        c = LLMChoice("both")
+        assert c.use_claude
+        assert c.use_gemini
+        assert not c.use_gemma
+        assert not c.escalate_to_opus
+
+    def test_gemma_opus(self):
+        c = LLMChoice("gemma+opus")
+        assert not c.use_claude
+        assert not c.use_gemini
+        assert c.use_gemma
+        assert c.escalate_to_opus
+
+    def test_all(self):
+        c = LLMChoice("all")
+        assert c.use_claude
+        assert c.use_gemini
+        assert c.use_gemma
+        assert c.escalate_to_opus
+
+    def test_gemma_only(self):
+        c = LLMChoice("gemma")
+        assert not c.use_claude
+        assert not c.use_gemini
+        assert c.use_gemma
+        assert not c.escalate_to_opus
+
+
+class TestShouldEscalate:
+    def test_critical_always_escalates(self):
+        f = {"severity": "critical", "confidence": 0.3, "category": "complexity"}
+        assert should_escalate(f)
+
+    def test_needs_escalation_flag(self):
+        f = {"severity": "warning", "confidence": 0.5, "needs_escalation": True}
+        assert should_escalate(f)
+
+    def test_warning_high_confidence_security(self):
+        f = {"severity": "warning", "confidence": 0.9, "category": "security"}
+        assert should_escalate(f)
+
+    def test_warning_low_confidence_no_escalate(self):
+        f = {"severity": "warning", "confidence": 0.3, "category": "security"}
+        assert not should_escalate(f)
+
+    def test_warning_high_confidence_non_security(self):
+        f = {"severity": "warning", "confidence": 0.9, "category": "complexity"}
+        assert not should_escalate(f)
+
+    def test_info_never_escalates(self):
+        f = {"severity": "info", "confidence": 1.0, "category": "security"}
+        assert not should_escalate(f)
+
+
+class TestParseOpusVerdict:
+    def test_json_block(self):
+        raw = '```json\n{"verdict": "confirmed", "severity": "critical", "detail": "Valid", "suggestion": "Fix it"}\n```'
+        v = parse_opus_verdict(raw)
+        assert v["verdict"] == "confirmed"
+
+    def test_plain_json(self):
+        raw = '{"verdict": "dismissed", "detail": "False positive"}'
+        v = parse_opus_verdict(raw)
+        assert v["verdict"] == "dismissed"
+
+    def test_invalid_returns_error(self):
+        raw = "This is not JSON"
+        v = parse_opus_verdict(raw)
+        assert v["verdict"] == "error"

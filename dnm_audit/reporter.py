@@ -62,6 +62,18 @@ def generate_repo_report(
             lines.append(item["detail"])
             lines.append("")
             lines.append(f"**Suggestion**: {item['suggestion']}")
+
+            # Show Opus verdict for escalated Gemma findings
+            if item.get("_escalation"):
+                verdict = item.get("opus_verdict", "unknown")
+                icon = {"confirmed": "v", "downgraded": ">", "dismissed": "x"}.get(
+                    verdict, "?"
+                )
+                lines.append("")
+                lines.append(
+                    f"**Opus verdict**: [{icon}] {verdict}"
+                    f" ({item.get('opus_severity', '')}) {item.get('opus_detail', '')}"
+                )
             lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -82,13 +94,17 @@ def generate_digest(lens: str, repo_summaries: list[dict]) -> str:
         f"**Findings**: {total_findings}",
         f"**Critical**: {total_critical}",
         "",
-        "| Repo | Findings | Critical | Files |",
-        "| --- | --- | --- | --- |",
+        "| Repo | Findings | Critical | Files | Escalations |",
+        "| --- | --- | --- | --- | --- |",
     ]
 
     for s in repo_summaries:
+        esc = s.get("escalations", 0)
+        esc_confirmed = s.get("escalations_confirmed", 0)
+        esc_str = f"{esc_confirmed}/{esc}" if esc > 0 else "-"
         lines.append(
-            f"| {s['repo']} | {s['findings']} | {s['critical']} | {s['files_reviewed']} |"
+            f"| {s['repo']} | {s['findings']} | {s['critical']}"
+            f" | {s['files_reviewed']} | {esc_str} |"
         )
 
     return "\n".join(lines) + "\n"

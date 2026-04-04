@@ -1,5 +1,6 @@
 """Tests for HealthDB SQLite state tracking."""
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -170,3 +171,118 @@ def test_get_trends_limit(tmp_path):
 
     rows = db.get_trends("repo1", limit=7)
     assert len(rows) == 7
+
+
+# --- Escalation tracking tests ---
+
+
+def test_escalations_table_created(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(tmp_path / "test.db")
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='escalations'"
+    )
+    assert cur.fetchone() is not None
+    conn.close()
+
+
+def test_review_sources_table_created(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(tmp_path / "test.db")
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='review_sources'"
+    )
+    assert cur.fetchone() is not None
+    conn.close()
+
+
+def test_insert_escalation(tmp_path):
+    db = _make_db(tmp_path)
+    gemma_finding = {
+        "severity": "critical",
+        "confidence": 0.9,
+        "title": "SQL injection risk",
+        "detail": "User input not sanitized",
+    }
+    opus_result = {
+        "opus_verdict": "confirmed",
+        "opus_severity": "critical",
+        "opus_detail": "Valid finding, user input goes directly to query",
+    }
+    db.insert_escalation("repo1", "src/db.py", "resilience", gemma_finding, opus_result)
+
+    stats = db.get_escalation_stats(repo="repo1")
+    assert stats["total"] == 1
+    assert stats["confirmed"] == 1
+    assert stats["dismissed"] == 0
+
+
+def test_insert_escalation_dismissed(tmp_path):
+    db = _make_db(tmp_path)
+    gemma_finding = {
+        "severity": "critical",
+        "confidence": 0.6,
+        "title": "False alarm",
+        "detail": "Looks wrong",
+    }
+    opus_result = {
+        "opus_verdict": "dismissed",
+        "opus_severity": "info",
+        "opus_detail": "Not an issue",
+    }
+    db.insert_escalation(
+        "repo1", "src/safe.py", "resilience", gemma_finding, opus_result
+    )
+
+    stats = db.get_escalation_stats(repo="repo1")
+    assert stats["total"] == 1
+    assert stats["dismissed"] == 1
+    assert stats["false_positive_rate"] == 1.0
+
+
+def test_insert_review_source(tmp_path):
+    db = _make_db(tmp_path)
+    db.insert_review_source("repo1", "src/app.py", "complexity", "gemma", 3, 5000)
+    db.insert_review_source("repo1", "src/app.py", "complexity", "claude", 2, 0)
+
+    # Just verify no errors; these are write-only for now
+    stats = db.get_escalation_stats(repo="repo1")
+    assert stats["total"] == 0  # no escalations, just sources
+
+
+def test_false_positive_rate_by_lens(tmp_path):
+    db = _make_db(tmp_path)
+    # 2 confirmed, 1 dismissed in complexity
+    for title in ("Bug 1", "Bug 2"):
+        db.insert_escalation(
+            "repo1",
+            "f.py",
+            "complexity",
+            {"severity": "critical", "confidence": 0.9, "title": title, "detail": ""},
+            {
+                "opus_verdict": "confirmed",
+                "opus_severity": "critical",
+                "opus_detail": "",
+            },
+        )
+    db.insert_escalation(
+        "repo1",
+        "g.py",
+        "complexity",
+        {"severity": "critical", "confidence": 0.5, "title": "FP", "detail": ""},
+        {"opus_verdict": "dismissed", "opus_severity": "info", "opus_detail": ""},
+    )
+
+    rates = db.get_false_positive_rate_by_lens()
+    assert "complexity" in rates
+    assert rates["complexity"]["total"] == 3
+    assert rates["complexity"]["confirmed"] == 2
+    assert rates["complexity"]["dismissed"] == 1
+    assert rates["complexity"]["false_positive_rate"] == round(1 / 3, 2)
+
+
+def test_escalation_stats_empty(tmp_path):
+    db = _make_db(tmp_path)
+    stats = db.get_escalation_stats()
+    assert stats["total"] == 0
+    assert stats["false_positive_rate"] == 0.0
