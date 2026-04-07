@@ -112,9 +112,6 @@ class HealthDB:
         self._conn.execute(CREATE_HISTORY_INDEX)
         self._conn.execute(CREATE_ESCALATIONS_TABLE)
         self._conn.execute(CREATE_ESCALATIONS_INDEX)
-        self._conn.execute(CREATE_ESCALATIONS_CATEGORY_INDEX)
-        self._conn.execute(CREATE_REVIEW_SOURCES_TABLE)
-        self._conn.execute(CREATE_REVIEW_SOURCES_INDEX)
         # Migration: add gemma_category column to existing escalations tables
         try:
             self._conn.execute(
@@ -122,6 +119,9 @@ class HealthDB:
             )
         except sqlite3.OperationalError:
             pass  # column already exists
+        self._conn.execute(CREATE_ESCALATIONS_CATEGORY_INDEX)
+        self._conn.execute(CREATE_REVIEW_SOURCES_TABLE)
+        self._conn.execute(CREATE_REVIEW_SOURCES_INDEX)
         self._conn.commit()
 
     def upsert_file(
