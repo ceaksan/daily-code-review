@@ -138,6 +138,61 @@ class TestShouldEscalate:
         assert not should_escalate(f)
 
 
+class TestShadowMode:
+    def test_shadow_mode_escalates_all(self, tmp_path):
+        from unittest.mock import patch
+
+        from dnm_audit.reviewer import review_batch, LLMChoice
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "src").mkdir()
+        (repo_path / "src" / "app.py").write_text("print('hello')")
+
+        repo_config = {
+            "name": "test-repo",
+            "path": repo_path,
+            "architecture": "",
+            "languages": ["python"],
+            "source_dirs": ["src/"],
+            "ignore_dirs": [],
+            "gemma_enabled": True,
+        }
+
+        candidates = [{"path": "src/app.py", "complexity": 5, "static_issues": 0}]
+        llm = LLMChoice("gemma+opus")
+
+        low_finding = {
+            "file": "src/app.py",
+            "severity": "info",
+            "confidence": 0.2,
+            "category": "duplication",
+            "title": "Minor dup",
+            "detail": "Not important",
+            "needs_escalation": False,
+        }
+        gemma_response = json.dumps([low_finding])
+        opus_response = '{"verdict": "dismissed", "severity": "info", "detail": "Not real", "suggestion": ""}'
+
+        with (
+            patch("dnm_audit.reviewer.SHADOW_MODE", True),
+            patch("dnm_audit.reviewer.call_ollama", return_value=(gemma_response, 100)),
+            patch("dnm_audit.reviewer.call_llm", return_value=opus_response),
+        ):
+            findings = review_batch(
+                repo_config=repo_config,
+                candidates=candidates,
+                lens="duplication",
+                llm=llm,
+                quiet=True,
+            )
+
+        escalated = [f for f in findings if f.get("_escalation")]
+        assert len(escalated) == 1
+        assert escalated[0]["_shadow_decision"] is False
+        assert escalated[0]["opus_verdict"] == "dismissed"
+
+
 class TestParseOpusVerdict:
     def test_json_block(self):
         raw = '```json\n{"verdict": "confirmed", "severity": "critical", "detail": "Valid", "suggestion": "Fix it"}\n```'

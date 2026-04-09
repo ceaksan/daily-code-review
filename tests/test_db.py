@@ -281,6 +281,52 @@ def test_false_positive_rate_by_lens(tmp_path):
     assert rates["complexity"]["false_positive_rate"] == round(1 / 3, 2)
 
 
+def test_insert_escalation_with_shadow_decision(tmp_path):
+    db = _make_db(tmp_path)
+    gemma_finding = {
+        "severity": "warning",
+        "confidence": 0.4,
+        "title": "Minor style issue",
+        "detail": "Not normally escalated",
+    }
+    opus_result = {
+        "opus_verdict": "dismissed",
+        "opus_severity": "info",
+        "opus_detail": "Not a real issue",
+    }
+    db.insert_escalation(
+        "repo1",
+        "src/style.py",
+        "complexity",
+        gemma_finding,
+        opus_result,
+        shadow_decision=False,
+    )
+    db.insert_escalation(
+        "repo1",
+        "src/bug.py",
+        "resilience",
+        {"severity": "critical", "confidence": 0.9, "title": "Real bug", "detail": ""},
+        {
+            "opus_verdict": "confirmed",
+            "opus_severity": "critical",
+            "opus_detail": "Valid",
+        },
+        shadow_decision=True,
+    )
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT path, shadow_decision FROM escalations ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0]["shadow_decision"] == 0  # False -> 0
+    assert rows[1]["shadow_decision"] == 1  # True -> 1
+
+
 def test_escalation_stats_empty(tmp_path):
     db = _make_db(tmp_path)
     stats = db.get_escalation_stats()

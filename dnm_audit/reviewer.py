@@ -27,6 +27,7 @@ from dnm_audit.config import (
     OLLAMA_TIMEOUT_CONNECT,
     OLLAMA_TIMEOUT_READ,
     PROMPTS_DIR,
+    SHADOW_MODE,
 )
 
 logger = logging.getLogger(__name__)
@@ -502,16 +503,26 @@ def review_batch(
                                 )
                                 _conf_stats_cache[cat] = db.get_confidence_stats(cat)
 
-                        to_escalate = [
-                            f
-                            for f in findings
-                            if should_escalate(
+                        escalation_decisions = {
+                            id(f): should_escalate(
                                 f,
                                 db=None,
                                 lens=lens,
                                 _threshold_cache=_threshold_cache,
                             )
-                        ]
+                            for f in findings
+                        }
+
+                        if SHADOW_MODE:
+                            to_escalate = list(findings)
+                        else:
+                            to_escalate = [
+                                f for f in findings if escalation_decisions[id(f)]
+                            ]
+
+                        for f in to_escalate:
+                            f["_shadow_decision"] = escalation_decisions[id(f)]
+
                         if to_escalate:
                             # Tag anomalous confidence for Opus prompt
                             for ef in to_escalate:

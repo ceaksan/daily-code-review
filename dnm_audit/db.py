@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS escalations (
     opus_severity TEXT,
     opus_detail TEXT,
     was_true_positive INTEGER,
-    gemma_category TEXT DEFAULT ''
+    gemma_category TEXT DEFAULT '',
+    shadow_decision INTEGER
 )
 """
 
@@ -116,6 +117,13 @@ class HealthDB:
         try:
             self._conn.execute(
                 "ALTER TABLE escalations ADD COLUMN gemma_category TEXT DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        # Migration: add shadow_decision column to existing escalations tables
+        try:
+            self._conn.execute(
+                "ALTER TABLE escalations ADD COLUMN shadow_decision INTEGER"
             )
         except sqlite3.OperationalError:
             pass  # column already exists
@@ -271,18 +279,20 @@ class HealthDB:
         lens: str,
         gemma_finding: dict,
         opus_result: dict,
+        shadow_decision: bool | None = None,
     ):
         now = datetime.now(timezone.utc).isoformat()
         verdict = opus_result.get("opus_verdict", "error")
         was_tp = (
             1 if verdict == "confirmed" else (0 if verdict == "dismissed" else None)
         )
+        shadow_int = int(shadow_decision) if shadow_decision is not None else None
         self._conn.execute(
             """INSERT INTO escalations
                (repo, path, lens, run_date, gemma_severity, gemma_confidence,
                 gemma_title, gemma_detail, opus_verdict, opus_severity,
-                opus_detail, was_true_positive, gemma_category)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                opus_detail, was_true_positive, gemma_category, shadow_decision)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 repo,
                 path,
@@ -297,6 +307,7 @@ class HealthDB:
                 opus_result.get("opus_detail", ""),
                 was_tp,
                 gemma_finding.get("category", ""),
+                shadow_int,
             ),
         )
         self._conn.commit()
