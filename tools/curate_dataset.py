@@ -13,13 +13,14 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system-curation.md"
-CLAUDE_CMD = "/Users/testuser/.local/bin/claude"
+CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
 
 GOLD_SCHEMA_FIELDS = ("instruction", "input", "thought", "output")
 SCORE_FIELDS = (
