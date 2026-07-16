@@ -535,3 +535,28 @@ class TestRunSecurityAuditDryRun:
         )
         assert res is None
         assert not (vault / "2026-07-16" / "r-security.md").exists()
+
+
+class TestCliSecurityFlag:
+    def test_security_routes_to_audit_and_skips_lens(self, tmp_path, monkeypatch):
+        import dnm_audit.cli as cli
+        calls = {"security": 0, "lens": 0}
+
+        def fake_security(repo_config, config, db, vault_dir, date_str, **kw):
+            calls["security"] += 1
+            return None
+
+        def fake_run_repo_audit(*a, **k):
+            calls["lens"] += 1
+            return None
+
+        monkeypatch.setattr(cli, "run_security_audit", fake_security, raising=False)
+        monkeypatch.setattr(cli, "run_repo_audit", fake_run_repo_audit)
+        monkeypatch.setattr(cli, "REPOS", [{"name": "r", "path": str(tmp_path),
+                                            "source_dirs": [], "ignore_dirs": []}])
+        monkeypatch.setattr(cli, "VAULT_DIR", tmp_path / "out")
+        monkeypatch.setattr(cli, "DB_PATH", tmp_path / "s.db")
+        monkeypatch.setattr("sys.argv", ["dnm-audit", "--security", "--quiet"])
+        cli.main()
+        assert calls["security"] == 1
+        assert calls["lens"] == 0

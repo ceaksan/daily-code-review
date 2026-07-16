@@ -16,6 +16,7 @@ import argparse
 from datetime import datetime
 
 from dnm_audit.config import REPOS, LENS_SCHEDULE, VAULT_DIR, DB_PATH
+from dnm_audit import config as _config
 from dnm_audit.db import HealthDB
 from dnm_audit.scanner import scan_repo
 from dnm_audit.reviewer import review_batch, check_ollama_health, LLMChoice
@@ -24,6 +25,7 @@ from dnm_audit.reporter import (
     generate_digest,
     generate_trends_report,
 )
+from dnm_audit.security import run_security_audit
 
 SEPARATOR_WIDTH = 40
 
@@ -174,6 +176,11 @@ def main():
         action="store_true",
         help="Show finding trends for last 14 runs per repo",
     )
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Run manual SAST security scan (bypasses lens rotation)",
+    )
     args = parser.parse_args()
 
     repos = REPOS
@@ -182,6 +189,25 @@ def main():
         if not repos:
             print(f"Unknown repo: {args.repo}")
             return
+
+    if args.security:
+        if args.llm and args.llm != "both" and not args.quiet:
+            print("  Note: --llm ignored; security path is Claude-only.")
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        VAULT_DIR.mkdir(parents=True, exist_ok=True)
+        db = HealthDB(DB_PATH)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        for repo_config in repos:
+            run_security_audit(
+                repo_config,
+                _config,
+                db,
+                VAULT_DIR,
+                date_str,
+                quiet=args.quiet,
+                dry_run=args.dry_run,
+            )
+        return
 
     if args.ollama_check:
         from dnm_audit.config import OLLAMA_BASE_URL, OLLAMA_MODEL
