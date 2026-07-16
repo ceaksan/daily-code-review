@@ -158,3 +158,67 @@ class TestBuildInventory:
         paths = {e["path"] for e in inv}
         assert "src/link.env" not in paths
         assert any(n["reason"] == "symlink-escape" for n in not_scanned)
+
+
+class TestReconHash:
+    def test_changes_when_file_hash_changes(self):
+        cat = [{"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True}]
+        inv1 = [{"path": "a.py", "content_hash": "h1", "size": 1}]
+        inv2 = [{"path": "a.py", "content_hash": "h2", "size": 1}]
+        assert security.compute_recon_hash(
+            inv1, cat, "p"
+        ) != security.compute_recon_hash(inv2, cat, "p")
+
+    def test_changes_when_catalog_changes(self):
+        inv = [{"path": "a.py", "content_hash": "h1", "size": 1}]
+        c1 = [{"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True}]
+        c2 = [{"id": "xss", "title": "T", "prompt": "sec-xss.md", "enabled": True}]
+        assert security.compute_recon_hash(inv, c1, "p") != security.compute_recon_hash(
+            inv, c2, "p"
+        )
+
+    def test_stable_when_nothing_changes(self):
+        inv = [{"path": "a.py", "content_hash": "h1", "size": 1}]
+        c = [{"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True}]
+        assert security.compute_recon_hash(inv, c, "p") == security.compute_recon_hash(
+            inv, c, "p"
+        )
+
+
+class TestGuardedRead:
+    def test_reads_valid_inventory_path(self, tmp_path):
+        (tmp_path / "a.py").write_text("hello")
+        out = security.guarded_read(tmp_path.resolve(), "a.py", {"a.py"})
+        assert out == "hello"
+
+    def test_rejects_traversal(self, tmp_path):
+        assert security.guarded_read(tmp_path.resolve(), "../x", {"../x"}) is None
+
+    def test_rejects_not_in_inventory(self, tmp_path):
+        (tmp_path / "a.py").write_text("hi")
+        assert security.guarded_read(tmp_path.resolve(), "a.py", set()) is None
+
+
+class TestChunkFiles:
+    def test_splits_by_budget(self, tmp_path):
+        (tmp_path / "a.py").write_text("a" * 60)
+        (tmp_path / "b.py").write_text("b" * 60)
+        inv = {"a.py", "b.py"}
+        batches, ns = security.chunk_files(
+            tmp_path.resolve(), ["a.py", "b.py"], inv, budget=100
+        )
+        assert len(batches) == 2  # each 60 chars, budget 100 -> separate batches
+
+    def test_oversized_single_file_chunked_not_dropped(self, tmp_path):
+        (tmp_path / "big.py").write_text("\n".join(f"line{i}" for i in range(400)))
+        batches, ns = security.chunk_files(
+            tmp_path.resolve(), ["big.py"], {"big.py"}, budget=200
+        )
+        assert len(batches) >= 2
+        assert ns == []
+
+    def test_unreadable_path_to_not_scanned(self, tmp_path):
+        batches, ns = security.chunk_files(
+            tmp_path.resolve(), ["ghost.py"], {"ghost.py"}, budget=100
+        )
+        assert any(n["reason"] in ("unreadable", "invalid") for n in ns)

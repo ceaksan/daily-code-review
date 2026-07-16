@@ -3,6 +3,7 @@
 import fnmatch
 import hashlib
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -229,3 +230,94 @@ def build_inventory(repo_config: dict, config) -> tuple[list[dict], list[dict]]:
     inventory.sort(key=lambda e: e["path"])
     not_scanned.sort(key=lambda e: e["path"])
     return inventory, not_scanned
+
+
+def _prompt_sha(prompt_name: str) -> str:
+    p = PROMPTS_SECURITY_DIR / prompt_name
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        return "MISSING"
+
+
+def compute_recon_hash(
+    inventory: list[dict], catalog: list[dict], recon_prompt_sha: str
+) -> str:
+    h = hashlib.sha256()
+    for e in sorted(inventory, key=lambda x: x["path"]):
+        h.update(f"{e['path']}\x00{e['content_hash']}\x00".encode())
+    for c in sorted(catalog, key=lambda x: x["id"]):
+        h.update(
+            f"{c['id']}\x00{c['title']}\x00{c['prompt']}\x00{c['enabled']}\x00".encode()
+        )
+        h.update((_prompt_sha(c["prompt"]) + "\x00").encode())
+    h.update(recon_prompt_sha.encode())
+    return h.hexdigest()
+
+
+def _is_safe_rel(rel_path: str) -> bool:
+    if not rel_path or os.path.isabs(rel_path):
+        return False
+    norm = os.path.normpath(rel_path)
+    return not (norm == ".." or norm.startswith(".." + os.sep))
+
+
+def guarded_read(repo_root: Path, rel_path: str, inventory_paths: set) -> str | None:
+    if not _is_safe_rel(rel_path) or rel_path not in inventory_paths:
+        return None
+    full = repo_root / rel_path
+    try:
+        real = full.resolve()
+        real.relative_to(repo_root)
+    except (ValueError, OSError):
+        return None
+    try:
+        return full.read_text(errors="replace")
+    except OSError:
+        return None
+
+
+def chunk_files(
+    repo_root: Path, rel_paths: list[str], inventory_paths: set, budget: int
+) -> tuple[list[dict], list[dict]]:
+    batches: list[dict] = []
+    not_scanned: list[dict] = []
+    current: dict[str, str] = {}
+    current_size = 0
+
+    def flush():
+        nonlocal current, current_size
+        if current:
+            batches.append(current)
+            current = {}
+            current_size = 0
+
+    for rel in rel_paths:
+        text = guarded_read(repo_root, rel, inventory_paths)
+        if text is None:
+            not_scanned.append({"path": rel, "reason": "unreadable"})
+            continue
+        if len(text) > budget:
+            flush()
+            lines = text.splitlines(keepends=True)
+            chunk: list[str] = []
+            start = 1
+            size = 0
+            for i, ln in enumerate(lines, start=1):
+                chunk.append(ln)
+                size += len(ln)
+                if size >= budget:
+                    batches.append({f"{rel}#L{start}-{i}": "".join(chunk)})
+                    chunk = []
+                    size = 0
+                    start = i + 1
+            if chunk:
+                batches.append({f"{rel}#L{start}-{len(lines)}": "".join(chunk)})
+            continue
+        if current_size + len(text) > budget:
+            flush()
+        current[rel] = text
+        current_size += len(text)
+
+    flush()
+    return batches, not_scanned
