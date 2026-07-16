@@ -499,3 +499,39 @@ class TestPromptFilesPresent:
 
         missing = security.verify_prompt_files(SimpleNamespace())
         assert missing == [], f"missing prompt files: {missing}"
+
+
+class TestDigestIdempotent:
+    def test_replace_not_append(self, tmp_path):
+        d = tmp_path / "DIGEST.md"
+        security.write_security_digest(d, "repoA", [{"verification": "confirmed"}])
+        security.write_security_digest(
+            d, "repoA", [{"verification": "confirmed"}, {"verification": "failed"}]
+        )
+        text = d.read_text()
+        assert text.count("repoA") == 1
+
+
+class TestRunSecurityAuditDryRun:
+    def test_dry_run_no_report_written(self, tmp_path, capsys):
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(
+            SECURITY_CATALOG=[
+                {"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True},
+            ]
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("import sqlite3")
+        repo = dict(name="r", path=str(tmp_path), source_dirs=["src/"], ignore_dirs=[])
+        db = HealthDB(tmp_path / "s.db")
+        vault = tmp_path / "out"
+
+        def claude(prompt):
+            return json.dumps({"sqli": ["src/app.py"]})
+
+        res = security.run_security_audit(
+            repo, cfg, db, vault, "2026-07-16", claude=claude, quiet=True, dry_run=True
+        )
+        assert res is None
+        assert not (vault / "2026-07-16" / "r-security.md").exists()

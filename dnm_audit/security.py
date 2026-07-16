@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dnm_audit.reviewer import call_llm, parse_findings  # parse_findings reused later
 from dnm_audit.config import CLAUDE_CMD, MAX_CHARS_PER_BATCH
+from dnm_audit.reporter import generate_security_report
 
 logger = logging.getLogger(__name__)
 
@@ -559,4 +560,108 @@ def verify_prompt_files(config) -> list[str]:
     for extra in ("recon.md", "verify-refute.md"):
         if not (PROMPTS_SECURITY_DIR / extra).is_file():
             missing.append(extra)
+    return missing
+
+
+def build_profile_summary(profile: dict) -> str:
+    return (
+        "; ".join(f"{cid}:{len(paths)} files" for cid, paths in sorted(profile.items()))
+        or "none"
+    )
+
+
+def write_security_digest(
+    digest_path: Path, repo_name: str, active: list[dict]
+) -> None:
+    confirmed = sum(1 for f in active if f.get("verification") == "confirmed")
+    line = f"- {repo_name}: {len(active)} active ({confirmed} confirmed) [security]"
+    digest_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = digest_path.read_text().splitlines() if digest_path.exists() else []
+    prefix = f"- {repo_name}:"
+    replaced = False
+    out = []
+    for ln in existing:
+        if ln.startswith(prefix) and "[security]" in ln:
+            out.append(line)
+            replaced = True
+        else:
+            out.append(ln)
+    if not replaced:
+        out.append(line)
+    digest_path.write_text("\n".join(out) + "\n")
+
+
+def run_security_audit(
+    repo_config,
+    config,
+    db,
+    vault_dir,
+    date_str,
+    *,
+    claude=None,
+    quiet=False,
+    dry_run=False,
+):
+    claude = claude or _default_claude
+    repo_path = Path(repo_config["path"])
+    if not repo_path.exists():
+        if not quiet:
+            print(f"  {repo_config['name']}: path not found, skipping")
+        return None
+
+    inventory, inv_not_scanned = build_inventory(repo_config, config)
+    profile = run_recon(
+        repo_config, config, db, inventory, inv_not_scanned, claude=claude, quiet=quiet
+    )
+
+    if dry_run:
+        if not quiet:
+            print(f"  Applicable classes: {len(profile)}")
+            for cid, paths in sorted(profile.items()):
+                print(f"    {cid}: {len(paths)} files")
+        return None
+
+    to_verify, capped, det_not_scanned = run_detect(
+        repo_config, config, profile, inventory, claude=claude, quiet=quiet
+    )
+
+    profile_summary = build_profile_summary(profile)
+    inventory_paths = {e["path"] for e in inventory}
+    verified = [
+        run_verify(repo_config, f, profile_summary, inventory_paths, claude=claude)
+        for f in to_verify
+    ]
+    active, refuted = partition_verified(verified)
+
+    per_class_capped: dict[str, int] = {}
+    for f in capped:
+        per_class_capped[f.get("category", "?")] = (
+            per_class_capped.get(f.get("category", "?"), 0) + 1
+        )
+    truncation = {"total_capped": len(capped), "per_class": per_class_capped}
+
+    not_scanned = inv_not_scanned + det_not_scanned
+    report = generate_security_report(
+        repo_config["name"], active, capped, refuted, not_scanned, truncation
+    )
+
+    report_dir = vault_dir / date_str
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / f"{repo_config['name']}-security.md").write_text(report)
+    write_security_digest(report_dir / "DIGEST.md", repo_config["name"], active)
+
+    if not quiet:
+        print(
+            f"  Security report: {report_dir / (repo_config['name'] + '-security.md')}"
+        )
+        print(
+            f"  Active: {len(active)} | Refuted: {len(refuted)} | Capped: {len(capped)}"
+        )
+
+    return {
+        "repo": repo_config["name"],
+        "active": len(active),
+        "refuted": len(refuted),
+        "capped": len(capped),
+    }
     return missing
