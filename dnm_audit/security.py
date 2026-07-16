@@ -497,3 +497,55 @@ def run_detect(repo_config, config, profile, inventory, *, claude=None, quiet=Fa
         get_setting(config, "SECURITY_MIN_VERIFY_PER_CLASS"),
     )
     return to_verify, capped, all_not_scanned
+
+
+VERIFY_PROMPT = PROMPTS_SECURITY_DIR / "verify-refute.md"
+_VALID_SEV = {"critical", "warning", "info"}
+
+
+def run_verify(
+    repo_config, finding, profile_summary, inventory_paths, *, claude=None
+) -> dict:
+    claude = claude or _default_claude
+    repo_root = Path(repo_config["path"]).resolve()
+    src_rel = str(finding.get("file", "")).split("#", 1)[0]
+    source = guarded_read(repo_root, src_rel, inventory_paths) or "(source unavailable)"
+    try:
+        header = VERIFY_PROMPT.read_text()
+    except OSError:
+        header = "Assess whether the finding is a real, exploitable vulnerability."
+    prompt = (
+        header
+        + f"\n\n## Finding\n{json.dumps(finding)}\n\n## Recon profile\n{profile_summary}\n\n"
+        + UNTRUSTED_HEADER
+        + "\n<<<REPO_DATA\n"
+        + source
+        + "\nREPO_DATA>>>\n"
+        + '\n\nReturn ONLY JSON: {"verdict":"confirmed|refuted","confidence":0..1,'
+        + '"severity":"critical|warning|info","exploit_path":"...","reason":"..."}'
+    )
+    raw = claude(prompt)
+    obj = _parse_json_obj(raw)
+    result = dict(finding)
+    verdict = (obj or {}).get("verdict")
+    if not isinstance(obj, dict) or verdict not in ("confirmed", "refuted"):
+        result["verification"] = "failed"
+        result["confidence"] = None
+        result["exploit_path"] = ""
+        result["verify_severity"] = None
+        return result
+    result["verification"] = verdict
+    conf = obj.get("confidence")
+    result["confidence"] = conf if isinstance(conf, (int, float)) else None
+    result["exploit_path"] = (
+        obj.get("exploit_path", "") if isinstance(obj.get("exploit_path"), str) else ""
+    )
+    sev = obj.get("severity")
+    result["verify_severity"] = sev if sev in _VALID_SEV else None
+    return result
+
+
+def partition_verified(verified: list[dict]) -> tuple[list[dict], list[dict]]:
+    active = [f for f in verified if f.get("verification") in ("confirmed", "failed")]
+    refuted = [f for f in verified if f.get("verification") == "refuted"]
+    return active, refuted

@@ -340,3 +340,75 @@ class TestSelectForVerify:
         )
         assert len(to_verify) == 1
         assert capped == []
+
+
+class TestRunVerify:
+    def _finding(self):
+        return {
+            "file": "a.py",
+            "line": 3,
+            "category": "sqli",
+            "severity": "warning",
+            "title": "SQLi",
+        }
+
+    def test_confirmed_sets_confidence_and_severity(self, tmp_path):
+        (tmp_path / "a.py").write_text("q = 'SELECT ' + x")
+        repo = dict(name="r", path=str(tmp_path))
+
+        def claude(prompt):
+            return json.dumps(
+                {
+                    "verdict": "confirmed",
+                    "confidence": 0.9,
+                    "severity": "critical",
+                    "exploit_path": "inject x",
+                    "reason": "ok",
+                }
+            )
+
+        out = security.run_verify(
+            repo, self._finding(), "profile", {"a.py"}, claude=claude
+        )
+        assert out["verification"] == "confirmed"
+        assert out["confidence"] == 0.9
+        assert out["verify_severity"] == "critical"
+
+    def test_refuted(self, tmp_path):
+        (tmp_path / "a.py").write_text("q = 1")
+        repo = dict(name="r", path=str(tmp_path))
+
+        def claude(prompt):
+            return json.dumps(
+                {
+                    "verdict": "refuted",
+                    "confidence": 0.8,
+                    "severity": "info",
+                    "exploit_path": "",
+                    "reason": "parametrized",
+                }
+            )
+
+        out = security.run_verify(repo, self._finding(), "p", {"a.py"}, claude=claude)
+        assert out["verification"] == "refuted"
+
+    def test_malformed_is_fail_open(self, tmp_path):
+        (tmp_path / "a.py").write_text("q = 1")
+        repo = dict(name="r", path=str(tmp_path))
+
+        def claude(prompt):
+            return "garbage not json"
+
+        out = security.run_verify(repo, self._finding(), "p", {"a.py"}, claude=claude)
+        assert out["verification"] == "failed"
+        assert out["confidence"] is None
+
+    def test_partition(self):
+        active, refuted = security.partition_verified(
+            [
+                {"verification": "confirmed"},
+                {"verification": "failed"},
+                {"verification": "refuted"},
+            ]
+        )
+        assert len(active) == 2 and len(refuted) == 1
