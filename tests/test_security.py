@@ -291,3 +291,52 @@ class TestRunRecon:
         inv2, ns2 = security.build_inventory(repo, cfg)
         security.run_recon(repo, cfg, db, inv2, ns2, claude=fake_claude, quiet=True)
         assert len(calls) == 2
+
+
+class TestDedup:
+    def test_exact_and_coarse(self):
+        f = lambda **k: {
+            "file": "a.py",
+            "line": 5,
+            "category": "sqli",
+            "severity": "info",
+            **k,
+        }
+        findings = [
+            f(title="X"),
+            f(title="X"),  # exact dup
+            f(title="X reworded", severity="critical"),  # coarse dup, higher sev
+        ]
+        out = security.dedup_findings(findings)
+        assert len(out) == 1
+        assert out[0]["severity"] == "critical"
+
+
+class TestSelectForVerify:
+    def _f(self, cat, sev, line):
+        return {
+            "file": "a.py",
+            "line": line,
+            "category": cat,
+            "severity": sev,
+            "title": f"{cat}{line}",
+        }
+
+    def test_min_quota_guaranteed_over_total(self):
+        by_class = {
+            c: [self._f(c, "info", i) for i in range(5)] for c in ("a", "b", "c")
+        }
+        to_verify, capped = security.select_for_verify(
+            by_class, max_per_class=30, max_total=2, min_per_class=2
+        )
+        # 3 classes * 2 min = 6 verified even though max_total=2
+        assert len(to_verify) == 6
+        assert len(capped) == 9
+
+    def test_fewer_than_quota_all_verified(self):
+        by_class = {"a": [self._f("a", "info", 1)]}
+        to_verify, capped = security.select_for_verify(
+            by_class, max_per_class=30, max_total=10, min_per_class=3
+        )
+        assert len(to_verify) == 1
+        assert capped == []

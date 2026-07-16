@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from dnm_audit.reviewer import call_llm, parse_findings  # parse_findings reused later
-from dnm_audit.config import CLAUDE_CMD
+from dnm_audit.config import CLAUDE_CMD, MAX_CHARS_PER_BATCH
 
 logger = logging.getLogger(__name__)
 
@@ -399,3 +399,101 @@ def run_recon(
     profile = validate_recon_output(parsed, catalog_ids, inventory_paths)
     db.upsert_security_recon(repo_config["name"], recon_hash, json.dumps(profile))
     return profile
+
+
+_SEV_RANK = {"critical": 0, "warning": 1, "info": 2}
+
+
+def _sev_rank(f: dict) -> int:
+    return _SEV_RANK.get(f.get("severity", "info"), 3)
+
+
+def dedup_findings(findings: list[dict]) -> list[dict]:
+    exact: dict[tuple, dict] = {}
+    for f in findings:
+        key = (f.get("file"), f.get("line"), f.get("category"), f.get("title"))
+        exact.setdefault(key, f)
+    coarse: dict[tuple, dict] = {}
+    for f in exact.values():
+        key = (f.get("file"), f.get("line"), f.get("category"))
+        cur = coarse.get(key)
+        if cur is None or _sev_rank(f) < _sev_rank(cur):
+            coarse[key] = f
+    return list(coarse.values())
+
+
+def _order(findings: list[dict]) -> list[dict]:
+    return sorted(
+        findings, key=lambda f: (_sev_rank(f), str(f.get("file")), f.get("line") or 0)
+    )
+
+
+def select_for_verify(by_class, max_per_class, max_total, min_per_class):
+    to_verify: list[dict] = []
+    leftovers: list[dict] = []
+    capped: list[dict] = []
+    for cid, items in by_class.items():
+        ordered = _order(items)[:max_per_class]
+        capped.extend(_order(items)[max_per_class:])
+        mn = min(min_per_class, len(ordered))
+        to_verify.extend(ordered[:mn])
+        leftovers.extend(ordered[mn:])
+    remaining = max_total - len(to_verify)
+    leftovers = _order(leftovers)
+    if remaining > 0:
+        to_verify.extend(leftovers[:remaining])
+        capped.extend(leftovers[remaining:])
+    else:
+        capped.extend(leftovers)
+    return to_verify, capped
+
+
+def run_detect(repo_config, config, profile, inventory, *, claude=None, quiet=False):
+    claude = claude or _default_claude
+    catalog = {c["id"]: c for c in load_catalog(config)}
+    repo_root = Path(repo_config["path"]).resolve()
+    inventory_paths = {e["path"] for e in inventory}
+    all_not_scanned: list[dict] = []
+    by_class: dict[str, list[dict]] = {}
+
+    for cid, paths in profile.items():
+        entry = catalog.get(cid)
+        if entry is None:
+            continue
+        prompt_path = PROMPTS_SECURITY_DIR / entry["prompt"]
+        try:
+            class_prompt = prompt_path.read_text()
+        except OSError:
+            all_not_scanned.append(
+                {"path": f"(class:{cid})", "reason": "missing-prompt"}
+            )
+            continue
+        batches, ns = chunk_files(
+            repo_root, paths, inventory_paths, MAX_CHARS_PER_BATCH
+        )
+        all_not_scanned.extend(ns)
+        class_findings: list[dict] = []
+        for batch in batches:
+            body = "\n".join(f"### {rel}\n{text}" for rel, text in batch.items())
+            prompt = (
+                class_prompt
+                + "\n\n"
+                + UNTRUSTED_HEADER
+                + "\n<<<REPO_DATA\n"
+                + body
+                + "\nREPO_DATA>>>\n"
+            )
+            raw = claude(prompt)
+            for f in parse_findings(raw):
+                f["category"] = cid
+                class_findings.append(f)
+        if class_findings:
+            by_class[cid] = dedup_findings(class_findings)
+
+    to_verify, capped = select_for_verify(
+        by_class,
+        get_setting(config, "SECURITY_MAX_FINDINGS_PER_CLASS"),
+        get_setting(config, "SECURITY_MAX_FINDINGS_TOTAL"),
+        get_setting(config, "SECURITY_MIN_VERIFY_PER_CLASS"),
+    )
+    return to_verify, capped, all_not_scanned
