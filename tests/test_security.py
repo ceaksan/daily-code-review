@@ -222,3 +222,72 @@ class TestChunkFiles:
             tmp_path.resolve(), ["ghost.py"], {"ghost.py"}, budget=100
         )
         assert any(n["reason"] in ("unreadable", "invalid") for n in ns)
+
+
+import json
+from dnm_audit.db import HealthDB
+
+
+class TestValidateReconOutput:
+    def test_drops_unknown_class_and_bad_path(self):
+        raw = {"sqli": ["a.py", "../evil"], "unknownclass": ["a.py"]}
+        out = security.validate_recon_output(raw, {"sqli", "xss"}, {"a.py"})
+        assert out == {"sqli": ["a.py"]}
+
+
+class TestRunRecon:
+    def _repo(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("import sqlite3")
+        return dict(name="r", path=str(tmp_path), source_dirs=["src/"], ignore_dirs=[])
+
+    def test_cache_miss_calls_claude_then_hit_does_not(self, tmp_path):
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(
+            SECURITY_CATALOG=[
+                {"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True},
+            ]
+        )
+        repo = self._repo(tmp_path)
+        db = HealthDB(tmp_path / "s.db")
+        inv, ns = security.build_inventory(repo, cfg)
+        calls = []
+
+        def fake_claude(prompt):
+            calls.append(prompt)
+            return json.dumps({"sqli": ["src/app.py"]})
+
+        out1 = security.run_recon(
+            repo, cfg, db, inv, ns, claude=fake_claude, quiet=True
+        )
+        assert out1 == {"sqli": ["src/app.py"]}
+        assert len(calls) == 1
+        out2 = security.run_recon(
+            repo, cfg, db, inv, ns, claude=fake_claude, quiet=True
+        )
+        assert out2 == {"sqli": ["src/app.py"]}
+        assert len(calls) == 1  # cache hit, no second call
+
+    def test_cache_invalidates_on_file_change(self, tmp_path):
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(
+            SECURITY_CATALOG=[
+                {"id": "sqli", "title": "T", "prompt": "sec-sqli.md", "enabled": True},
+            ]
+        )
+        repo = self._repo(tmp_path)
+        db = HealthDB(tmp_path / "s.db")
+        calls = []
+
+        def fake_claude(prompt):
+            calls.append(prompt)
+            return json.dumps({"sqli": ["src/app.py"]})
+
+        inv, ns = security.build_inventory(repo, cfg)
+        security.run_recon(repo, cfg, db, inv, ns, claude=fake_claude, quiet=True)
+        (tmp_path / "src" / "app.py").write_text("import os  # changed")
+        inv2, ns2 = security.build_inventory(repo, cfg)
+        security.run_recon(repo, cfg, db, inv2, ns2, claude=fake_claude, quiet=True)
+        assert len(calls) == 2
