@@ -255,6 +255,31 @@ python3 ~/.claude/hooks/training-review.py --export
 - [Full spec](docs/superpowers/specs/2026-04-03-local-ai-pipeline-design.md): architecture, data flow, escalation logic, metrics, risk assessment
 - [Dataset README](~/.claude/datasets/README.md): JSONL schema, quality filters, collection rate, projections
 
+## Security Mode (`--security`)
+
+Manual SAST scan, separate from the daily lens rotation. Runs recon (maps the attack
+surface and picks applicable vuln classes), per-class detection, and a refute-verify pass.
+Claude-only, sequential, on-demand, not for cron.
+
+```bash
+# Full security scan, all repos
+./dnm-audit --security
+
+# One repo
+./dnm-audit --security --repo my-app
+
+# Recon only (see which classes/files would be scanned, no detect/verify calls)
+./dnm-audit --security --dry-run --repo my-app
+```
+
+Report: `code-reviews/<date>/<repo>-security.md` with P0/P1/P2, plus "Capped (unverified)",
+"Refuted", and "Not scanned" sections. Extend coverage by adding a `sec-<class>.md` prompt
+and a `SECURITY_CATALOG` entry.
+
+**Data note:** detection sends raw source (including files that may contain secrets) to the
+Claude CLI, which transmits it to Anthropic. This is the same trust boundary as the lens
+path. Do not run it on repos whose secrets you will not send, and rotate anything it surfaces.
+
 ## Tests
 
 ```bash

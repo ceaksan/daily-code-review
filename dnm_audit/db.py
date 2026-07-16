@@ -96,6 +96,15 @@ CREATE_REVIEW_SOURCES_INDEX = (
     " ON review_sources (repo, llm_source, run_date DESC)"
 )
 
+CREATE_SECURITY_RECON_TABLE = """
+CREATE TABLE IF NOT EXISTS security_recon (
+    repo TEXT PRIMARY KEY,
+    recon_hash TEXT NOT NULL,
+    profile_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
 
 class HealthDB:
     def __init__(self, db_path: Path):
@@ -130,6 +139,7 @@ class HealthDB:
         self._conn.execute(CREATE_ESCALATIONS_CATEGORY_INDEX)
         self._conn.execute(CREATE_REVIEW_SOURCES_TABLE)
         self._conn.execute(CREATE_REVIEW_SOURCES_INDEX)
+        self._conn.execute(CREATE_SECURITY_RECON_TABLE)
         self._conn.commit()
 
     def upsert_file(
@@ -175,6 +185,23 @@ class HealthDB:
             "SELECT * FROM file_health WHERE repo = ? AND path = ?",
             (repo, path),
         )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_security_recon(self, repo: str, recon_hash: str, profile_json: str):
+        self._conn.execute(
+            """INSERT INTO security_recon (repo, recon_hash, profile_json, created_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(repo) DO UPDATE SET
+                   recon_hash = excluded.recon_hash,
+                   profile_json = excluded.profile_json,
+                   created_at = excluded.created_at""",
+            (repo, recon_hash, profile_json),
+        )
+        self._conn.commit()
+
+    def get_security_recon(self, repo: str) -> dict | None:
+        cur = self._conn.execute("SELECT * FROM security_recon WHERE repo = ?", (repo,))
         row = cur.fetchone()
         return dict(row) if row else None
 

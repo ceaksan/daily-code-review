@@ -56,3 +56,34 @@ REPOS = [
 
 # File extensions to review
 REVIEWABLE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+
+# --- Security mode (--security) ---
+# All optional; security.py falls back to built-in defaults via getattr.
+SECURITY_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".yml",
+    ".yaml",
+    ".json",
+    ".tf",
+    ".sh",
+    ".conf",
+    ".ini",
+    ".toml",
+    ".env",
+}
+SECURITY_FILE_PATTERNS = [
+    "Dockerfile*",
+    ".env*",
+    "*.tfvars",
+    "docker-compose*.yml",
+    "*.yml",
+]
+SECURITY_SOURCE_DIRS = None  # None = reuse each repo's source_dirs
+SECURITY_MAX_FINDINGS_PER_CLASS = 30
+SECURITY_MAX_FINDINGS_TOTAL = 120
+SECURITY_MIN_VERIFY_PER_CLASS = 3
+# SECURITY_CATALOG defaults to the built-in 13-class list; override to add/remove classes.
