@@ -1,0 +1,17 @@
+[project]
+name = "daily-code-review"
+type = "saas"
+
+[content]
+extensions = [".md", ".mdx"]
+
+[code]
+preset = "python"
+paths = ["src"]
+
+[graph]
+enabled = true
+edge_types = ["link", "tag", "category", "semantic", "import"]
+
+[indexing]
+ignore_patterns = ["__pycache__", ".venv", "*.egg-info", ".git"]
