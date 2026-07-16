@@ -412,3 +412,68 @@ class TestRunVerify:
             ]
         )
         assert len(active) == 2 and len(refuted) == 1
+
+
+from dnm_audit import reporter
+
+
+class TestSecurityReport:
+    def test_redacts_secret_value(self):
+        out = reporter.redact_secrets("token = AKIA1234567890ABCDEFGHIJKLMNOP")
+        assert "AKIA1234567890ABCDEFGHIJKLMNOP" not in out
+        assert "REDACTED" in out
+
+    def test_final_severity_prefers_verify(self):
+        assert (
+            reporter.final_severity({"severity": "info", "verify_severity": "critical"})
+            == "critical"
+        )
+        assert reporter.final_severity({"severity": "warning"}) == "warning"
+
+    def test_report_has_all_sections(self):
+        active = [
+            {
+                "file": "a.py",
+                "line": 1,
+                "category": "sqli",
+                "title": "SQLi",
+                "detail": "d",
+                "suggestion": "fix",
+                "severity": "critical",
+                "verify_severity": "critical",
+                "verification": "confirmed",
+                "confidence": 0.9,
+                "exploit_path": "x",
+            }
+        ]
+        capped = [
+            {
+                "file": "b.py",
+                "line": 2,
+                "category": "xss",
+                "title": "XSS",
+                "detail": "d",
+                "severity": "info",
+            }
+        ]
+        refuted = [
+            {
+                "file": "c.py",
+                "line": 3,
+                "category": "jwt",
+                "title": "JWT",
+                "detail": "d",
+                "reason": "not exploitable",
+                "verification": "refuted",
+            }
+        ]
+        not_scanned = [{"path": "big.bin", "reason": "unreadable"}]
+        trunc = {"total_capped": 1, "per_class": {"xss": 1}}
+        md = reporter.generate_security_report(
+            "myrepo", active, capped, refuted, not_scanned, trunc
+        )
+        assert "P0" in md
+        assert "Capped (unverified)" in md
+        assert "Refuted" in md
+        assert "Not scanned" in md
+        assert "Truncation" in md or "capped" in md.lower()
