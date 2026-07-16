@@ -1,3 +1,4 @@
+import os
 import pytest
 from types import SimpleNamespace
 
@@ -80,3 +81,69 @@ class TestSecurityReconTable:
     def test_get_missing_returns_none(self, tmp_path):
         db = HealthDB(tmp_path / "s.db")
         assert db.get_security_recon("nope") is None
+
+
+class TestMatching:
+    def test_suffix_match(self):
+        assert security.matches_security_file("a.py", {".py"}, [])
+
+    def test_pattern_match_dotenv(self):
+        assert security.matches_security_file(".env.local", set(), [".env*"])
+
+    def test_pattern_match_dockerfile(self):
+        assert security.matches_security_file("Dockerfile", set(), ["Dockerfile*"])
+
+    def test_no_match(self):
+        assert not security.matches_security_file("readme.md", {".py"}, ["Dockerfile*"])
+
+
+def _repo(tmp_path, **over):
+    cfg = dict(source_dirs=["src/"], ignore_dirs=["node_modules/"], path=str(tmp_path))
+    cfg.update(over)
+    return cfg
+
+
+class TestBuildInventory:
+    def test_includes_src_and_root_and_github(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("x=1")
+        (tmp_path / ".env").write_text("SECRET=abc")  # root-level
+        (tmp_path / "Dockerfile").write_text("FROM python")  # root, pattern
+        gh = tmp_path / ".github" / "workflows"
+        gh.mkdir(parents=True)
+        (gh / "ci.yml").write_text("on: push")
+        (tmp_path / "readme.md").write_text("nope")  # excluded
+
+        inv, not_scanned = security.build_inventory(_repo(tmp_path), SimpleNamespace())
+        paths = {e["path"] for e in inv}
+        assert "src/app.py" in paths
+        assert ".env" in paths
+        assert "Dockerfile" in paths
+        assert ".github/workflows/ci.yml" in paths
+        assert "readme.md" not in paths
+        assert all(len(e["content_hash"]) == 64 for e in inv)
+
+    def test_ignore_dirs_respected(self, tmp_path):
+        (tmp_path / "src" / "node_modules").mkdir(parents=True)
+        (tmp_path / "src" / "node_modules" / "x.js").write_text("y")
+        (tmp_path / "src" / "app.js").write_text("z")
+        inv, _ = security.build_inventory(_repo(tmp_path), SimpleNamespace())
+        paths = {e["path"] for e in inv}
+        assert "src/app.js" in paths
+        assert "src/node_modules/x.js" not in paths
+
+    def test_symlink_escape_skipped(self, tmp_path):
+        outside = tmp_path.parent / "outside_secret.env"
+        outside.write_text("SECRET=1")
+        (tmp_path / "src").mkdir()
+        link = tmp_path / "src" / "link.env"
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError):
+            import pytest
+
+            pytest.skip("symlinks unsupported")
+        inv, not_scanned = security.build_inventory(_repo(tmp_path), SimpleNamespace())
+        paths = {e["path"] for e in inv}
+        assert "src/link.env" not in paths
+        assert any(n["reason"] == "symlink-escape" for n in not_scanned)
