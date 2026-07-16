@@ -65,10 +65,15 @@ def generate_security_report(
     def emit_finding(f):
         title = redact_secrets(str(f.get("title", "")))
         lines.append(f"### {title}")
+        detect_sev = f.get("severity")
+        verify_sev = f.get("verify_severity")
+        sev_segment = ""
+        if detect_sev != verify_sev:
+            sev_segment = f" | detect: {detect_sev} -> verify: {verify_sev or 'n/a'}"
         lines.append(
             f"**{f.get('file')}:{f.get('line')}** | {f.get('category')} | "
             f"verification: {f.get('verification', 'n/a')} | "
-            f"confidence: {f.get('confidence')}"
+            f"confidence: {f.get('confidence')}{sev_segment}"
         )
         if f.get("exploit_path"):
             lines.append(f"- Exploit path: {redact_secrets(str(f['exploit_path']))}")

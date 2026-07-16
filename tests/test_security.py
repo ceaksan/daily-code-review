@@ -413,8 +413,56 @@ class TestRunVerify:
         )
         assert len(active) == 2 and len(refuted) == 1
 
+    def test_refuted_carries_reason(self, tmp_path):
+        (tmp_path / "a.py").write_text("q = 1")
+        repo = dict(name="r", path=str(tmp_path))
+
+        def claude(prompt):
+            return json.dumps(
+                {
+                    "verdict": "refuted",
+                    "confidence": 0.8,
+                    "severity": "info",
+                    "exploit_path": "",
+                    "reason": "parametrized, not injectable",
+                }
+            )
+
+        out = security.run_verify(repo, self._finding(), "p", {"a.py"}, claude=claude)
+        assert out["reason"] == "parametrized, not injectable"
+
 
 from dnm_audit import reporter
+
+
+class TestVerifyReportIntegration:
+    def test_refuted_reason_appears_in_report(self, tmp_path):
+        (tmp_path / "a.py").write_text("q = 1")
+        repo = dict(name="r", path=str(tmp_path))
+        finding = {
+            "file": "a.py",
+            "line": 3,
+            "category": "sqli",
+            "severity": "warning",
+            "title": "SQLi",
+        }
+        distinctive_reason = "parametrized query confirmed via prepared statement"
+
+        def claude(prompt):
+            return json.dumps(
+                {
+                    "verdict": "refuted",
+                    "confidence": 0.8,
+                    "severity": "info",
+                    "exploit_path": "",
+                    "reason": distinctive_reason,
+                }
+            )
+
+        verified = security.run_verify(repo, finding, "p", {"a.py"}, claude=claude)
+        active, refuted = security.partition_verified([verified])
+        md = reporter.generate_security_report("myrepo", active, [], refuted, [], {})
+        assert distinctive_reason in md
 
 
 class TestSecurityReport:
@@ -429,6 +477,25 @@ class TestSecurityReport:
             == "critical"
         )
         assert reporter.final_severity({"severity": "warning"}) == "warning"
+
+    def test_active_finding_shows_both_severities(self):
+        active = [
+            {
+                "file": "a.py",
+                "line": 1,
+                "category": "sqli",
+                "title": "SQLi",
+                "detail": "d",
+                "severity": "info",
+                "verify_severity": "critical",
+                "verification": "confirmed",
+                "confidence": 0.9,
+            }
+        ]
+        md = reporter.generate_security_report("myrepo", active, [], [], [], {})
+        assert "detect" in md
+        assert "info" in md
+        assert "critical" in md
 
     def test_report_has_all_sections(self):
         active = [
@@ -540,6 +607,7 @@ class TestRunSecurityAuditDryRun:
 class TestCliSecurityFlag:
     def test_security_routes_to_audit_and_skips_lens(self, tmp_path, monkeypatch):
         import dnm_audit.cli as cli
+
         calls = {"security": 0, "lens": 0}
 
         def fake_security(repo_config, config, db, vault_dir, date_str, **kw):
@@ -552,8 +620,18 @@ class TestCliSecurityFlag:
 
         monkeypatch.setattr(cli, "run_security_audit", fake_security, raising=False)
         monkeypatch.setattr(cli, "run_repo_audit", fake_run_repo_audit)
-        monkeypatch.setattr(cli, "REPOS", [{"name": "r", "path": str(tmp_path),
-                                            "source_dirs": [], "ignore_dirs": []}])
+        monkeypatch.setattr(
+            cli,
+            "REPOS",
+            [
+                {
+                    "name": "r",
+                    "path": str(tmp_path),
+                    "source_dirs": [],
+                    "ignore_dirs": [],
+                }
+            ],
+        )
         monkeypatch.setattr(cli, "VAULT_DIR", tmp_path / "out")
         monkeypatch.setattr(cli, "DB_PATH", tmp_path / "s.db")
         monkeypatch.setattr("sys.argv", ["dnm-audit", "--security", "--quiet"])

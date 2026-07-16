@@ -534,6 +534,7 @@ def run_verify(
         result["confidence"] = None
         result["exploit_path"] = ""
         result["verify_severity"] = None
+        result["reason"] = ""
         return result
     result["verification"] = verdict
     conf = obj.get("confidence")
@@ -543,6 +544,9 @@ def run_verify(
     )
     sev = obj.get("severity")
     result["verify_severity"] = sev if sev in _VALID_SEV else None
+    result["reason"] = (
+        obj.get("reason", "") if isinstance(obj.get("reason"), str) else ""
+    )
     return result
 
 
