@@ -2,6 +2,7 @@ import pytest
 from types import SimpleNamespace
 
 from dnm_audit import security
+from dnm_audit.db import HealthDB
 
 
 def _cfg(**over):
@@ -55,3 +56,27 @@ class TestLoadCatalog:
             security.get_setting(cfg, "SECURITY_MAX_FINDINGS_TOTAL")
             == security.SECURITY_DEFAULTS["SECURITY_MAX_FINDINGS_TOTAL"]
         )
+
+
+class TestSecurityReconTable:
+    def test_upsert_then_get(self, tmp_path):
+        db = HealthDB(tmp_path / "s.db")
+        db.upsert_security_recon("repoA", "hash1", '{"sqli": ["a.py"]}')
+        row = db.get_security_recon("repoA")
+        assert row["recon_hash"] == "hash1"
+        assert row["profile_json"] == '{"sqli": ["a.py"]}'
+
+    def test_single_row_per_repo(self, tmp_path):
+        db = HealthDB(tmp_path / "s.db")
+        db.upsert_security_recon("repoA", "hash1", "{}")
+        db.upsert_security_recon("repoA", "hash2", '{"x": []}')
+        row = db.get_security_recon("repoA")
+        assert row["recon_hash"] == "hash2"
+        cur = db._conn.execute(
+            "SELECT COUNT(*) c FROM security_recon WHERE repo='repoA'"
+        )
+        assert cur.fetchone()["c"] == 1
+
+    def test_get_missing_returns_none(self, tmp_path):
+        db = HealthDB(tmp_path / "s.db")
+        assert db.get_security_recon("nope") is None
