@@ -549,3 +549,14 @@ def partition_verified(verified: list[dict]) -> tuple[list[dict], list[dict]]:
     active = [f for f in verified if f.get("verification") in ("confirmed", "failed")]
     refuted = [f for f in verified if f.get("verification") == "refuted"]
     return active, refuted
+
+
+def verify_prompt_files(config) -> list[str]:
+    missing = []
+    for entry in load_catalog(config):
+        if not (PROMPTS_SECURITY_DIR / entry["prompt"]).is_file():
+            missing.append(entry["prompt"])
+    for extra in ("recon.md", "verify-refute.md"):
+        if not (PROMPTS_SECURITY_DIR / extra).is_file():
+            missing.append(extra)
+    return missing

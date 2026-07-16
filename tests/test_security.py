@@ -491,3 +491,11 @@ class TestSecurityReport:
         assert "Not scanned" in md
         not_scanned_section = md.split("Not scanned", 1)[1]
         assert "REDACTED" in not_scanned_section
+
+
+class TestPromptFilesPresent:
+    def test_all_catalog_prompts_exist(self):
+        from types import SimpleNamespace
+
+        missing = security.verify_prompt_files(SimpleNamespace())
+        assert missing == [], f"missing prompt files: {missing}"
