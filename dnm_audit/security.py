@@ -664,4 +664,3 @@ def run_security_audit(
         "refuted": len(refuted),
         "capped": len(capped),
     }
-    return missing
