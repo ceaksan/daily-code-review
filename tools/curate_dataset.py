@@ -8,6 +8,8 @@ Usage:
     python curate_dataset.py --input approved.jsonl --output gold.jsonl
     python curate_dataset.py --input approved.jsonl --score-only --threshold 7.0
     python curate_dataset.py --input approved.jsonl --rewrite --output gold.jsonl
+    python curate_dataset.py --input approved.jsonl --rewrite --domain naming-style --output gold-naming.jsonl
+    python curate_dataset.py --input approved.jsonl --score-only --stats
     python curate_dataset.py --input approved.jsonl --dry-run --limit 5
 """
 
@@ -22,12 +24,14 @@ from pathlib import Path
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system-curation.md"
 CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
 
-GOLD_SCHEMA_FIELDS = ("instruction", "input", "thought", "output")
+GOLD_SCHEMA_FIELDS = ("instruction", "input", "thought", "output", "domain")
+DOMAINS = ("naming-style", "security", "error-handling", "architecture", "general")
 SCORE_FIELDS = (
     "code_quality",
     "instruction_clarity",
     "generalizability",
     "composite",
+    "domain",
     "verdict",
     "reason",
 )
@@ -80,6 +84,12 @@ def parse_json_response(raw: str) -> dict | None:
         return None
 
 
+def validate_domain(domain: str | None) -> str:
+    if domain and domain in DOMAINS:
+        return domain
+    return "general"
+
+
 def build_score_prompt(system: str, record: dict) -> str:
     instruction = record.get("instruction", "")
     input_code = record.get("input", "")
@@ -106,7 +116,7 @@ def build_rewrite_prompt(system: str, record: dict) -> str:
         f"### Original Instruction\n```\n{instruction[:2000]}\n```\n\n"
         f"### Original Input\n```\n{input_code[:3000]}\n```\n\n"
         f"### Original Output\n```\n{output_code[:3000]}\n```\n\n"
-        f"Return ONLY the JSON object with instruction, input, thought, output fields."
+        f"Return ONLY the JSON object with instruction, input, thought, output, domain fields."
     )
 
 
@@ -115,7 +125,10 @@ def score_record(system: str, record: dict) -> dict | None:
     raw = call_claude(prompt)
     if not raw:
         return None
-    return parse_json_response(raw)
+    result = parse_json_response(raw)
+    if result:
+        result["domain"] = validate_domain(result.get("domain"))
+    return result
 
 
 def rewrite_record(system: str, record: dict) -> dict | None:
@@ -123,7 +136,32 @@ def rewrite_record(system: str, record: dict) -> dict | None:
     raw = call_claude(prompt)
     if not raw:
         return None
-    return parse_json_response(raw)
+    result = parse_json_response(raw)
+    if result:
+        result["domain"] = validate_domain(result.get("domain"))
+    return result
+
+
+def print_domain_stats(records: list[dict]) -> None:
+    counts: dict[str, int] = {d: 0 for d in DOMAINS}
+    unclassified = 0
+    for r in records:
+        curation = r.get("_curation", {})
+        domain = curation.get("domain", r.get("domain"))
+        if domain and domain in DOMAINS:
+            counts[domain] += 1
+        else:
+            unclassified += 1
+
+    total = sum(counts.values()) + unclassified
+    print("\n--- Domain Distribution ---", file=sys.stderr)
+    for domain, count in sorted(counts.items(), key=lambda x: -x[1]):
+        pct = (count / total * 100) if total > 0 else 0
+        bar = "#" * int(pct / 2)
+        print(f"  {domain:20s} {count:4d} ({pct:5.1f}%) {bar}", file=sys.stderr)
+    if unclassified:
+        print(f"  {'(unclassified)':20s} {unclassified:4d}", file=sys.stderr)
+    print(f"  {'TOTAL':20s} {total:4d}", file=sys.stderr)
 
 
 def main():
@@ -145,6 +183,16 @@ def main():
         type=float,
         default=7.0,
         help="Minimum composite score (default: 7.0)",
+    )
+    parser.add_argument(
+        "--domain",
+        choices=DOMAINS,
+        help="Filter output to a specific domain only",
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Print domain distribution after processing",
     )
     parser.add_argument(
         "--limit",
@@ -179,6 +227,8 @@ def main():
         records = records[: args.limit]
 
     print(f"Loaded {len(records)} records from {input_path}", file=sys.stderr)
+    if args.domain:
+        print(f"Domain filter: {args.domain}", file=sys.stderr)
 
     if args.dry_run:
         for i, r in enumerate(records):
@@ -190,9 +240,10 @@ def main():
         return
 
     system = load_system_prompt()
-    results = []
+    scored_records = []
     kept = 0
     discarded = 0
+    filtered_by_domain = 0
     errors = 0
 
     out_file = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
@@ -216,12 +267,25 @@ def main():
                 composite = result.get("composite", 0)
                 verdict = result.get("verdict", "discard")
                 reason = result.get("reason", "")
+                domain = result.get("domain", "general")
+
+                enriched = {**record, "_curation": result}
+                scored_records.append(enriched)
 
                 if composite >= args.threshold and verdict == "keep":
-                    enriched = {**record, "_curation": result}
+                    if args.domain and domain != args.domain:
+                        filtered_by_domain += 1
+                        print(
+                            f" SKIP (domain={domain}, want={args.domain})",
+                            file=sys.stderr,
+                        )
+                        continue
                     out_file.write(json.dumps(enriched, ensure_ascii=False) + "\n")
                     kept += 1
-                    print(f" KEEP ({composite:.1f}) {reason}", file=sys.stderr)
+                    print(
+                        f" KEEP ({composite:.1f}) [{domain}] {reason}",
+                        file=sys.stderr,
+                    )
                 else:
                     discarded += 1
                     print(f" DISCARD ({composite:.1f}) {reason}", file=sys.stderr)
@@ -234,9 +298,21 @@ def main():
                     continue
 
                 composite = result.get("composite", 0)
+                domain = result.get("domain", "general")
+
+                scored_records.append({**record, "_curation": result})
+
                 if composite < args.threshold:
                     discarded += 1
                     print(f" DISCARD ({composite:.1f})", file=sys.stderr)
+                    continue
+
+                if args.domain and domain != args.domain:
+                    filtered_by_domain += 1
+                    print(
+                        f" SKIP (domain={domain}, want={args.domain})",
+                        file=sys.stderr,
+                    )
                     continue
 
                 rewritten = rewrite_record(system, record)
@@ -248,11 +324,14 @@ def main():
                 if all(k in rewritten for k in GOLD_SCHEMA_FIELDS):
                     out_file.write(json.dumps(rewritten, ensure_ascii=False) + "\n")
                     kept += 1
-                    print(f" GOLD ({composite:.1f})", file=sys.stderr)
+                    print(
+                        f" GOLD ({composite:.1f}) [{domain}]",
+                        file=sys.stderr,
+                    )
                 else:
-                    errors += 1
                     missing = [k for k in GOLD_SCHEMA_FIELDS if k not in rewritten]
                     print(f" ERROR (missing fields: {missing})", file=sys.stderr)
+                    errors += 1
 
             if i < len(records) - 1 and args.delay > 0:
                 time.sleep(args.delay)
@@ -261,10 +340,13 @@ def main():
         if args.output and out_file is not sys.stdout:
             out_file.close()
 
-    print(
-        f"\nDone. Kept: {kept} | Discarded: {discarded} | Errors: {errors}",
-        file=sys.stderr,
-    )
+    summary = f"\nDone. Kept: {kept} | Discarded: {discarded} | Errors: {errors}"
+    if filtered_by_domain:
+        summary += f" | Filtered by domain: {filtered_by_domain}"
+    print(summary, file=sys.stderr)
+
+    if args.stats and scored_records:
+        print_domain_stats(scored_records)
 
 
 if __name__ == "__main__":

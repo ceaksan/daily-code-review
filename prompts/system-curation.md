@@ -18,10 +18,20 @@ Rate each example on three dimensions (0-10 scale):
   "instruction_clarity": 7,
   "generalizability": 6,
   "composite": 7.0,
+  "domain": "naming-style",
   "verdict": "keep|discard",
   "reason": "One sentence explaining your decision"
 }
 ```
+
+**Domain classification:** Classify each example into exactly one domain based on its primary focus:
+- `naming-style`: Variable/function naming, code style conventions, formatting patterns
+- `security`: Vulnerability detection, auth patterns, input validation, secret exposure
+- `error-handling`: Try/catch patterns, error propagation, edge cases, missing error boundaries
+- `architecture`: Component structure, separation of concerns, design patterns, dependency management
+- `general`: Everything else (refactoring, performance, documentation, mixed concerns)
+
+Choose the most specific applicable domain. If an example touches multiple domains, pick the one that is the primary teaching point.
 
 Composite = (code_quality * 0.4) + (instruction_clarity * 0.3) + (generalizability * 0.3)
 
@@ -36,7 +46,8 @@ When asked to rewrite, transform the example into ideal training format:
   "instruction": "Improved, clear instruction",
   "input": "Relevant code context (trimmed if needed)",
   "thought": "Step-by-step reasoning: what the reviewer notices, why it matters, what the fix should be",
-  "output": "The ideal code change, clean and well-structured"
+  "output": "The ideal code change, clean and well-structured",
+  "domain": "naming-style"
 }
 ```
 

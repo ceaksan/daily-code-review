@@ -203,6 +203,58 @@ Best for monitoring candidates during active development sessions. Requires Clau
 
 Both options can be combined: cron for the daily scheduled review, `/loop --dry-run` for candidate awareness during development.
 
+## Local AI Pipeline
+
+Captures every Claude Code edit as structured training data, runs local code reviews with Gemma 4 (via Ollama), and prepares a curated dataset for QLoRA fine-tuning. Goal: reduce cloud API cost by 50-70% while keeping review quality high.
+
+### Phases
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| 1. Dataset Collection | Active | PostToolUse hooks capture Edit/Write operations to JSONL |
+| 2. Gemma Code Review | Implemented | Gemma 4 reviews via Ollama, critical findings escalate to Opus |
+| 3. QLoRA Fine-tuning | Deferred | MLX-Tune on Mac Mini M1 16GB, pending 2,000+ approved examples |
+
+### Dataset
+
+Collected automatically at `~/.claude/datasets/`:
+
+| File | Description |
+|------|-------------|
+| `opus-interactions.jsonl` | Active dataset (Edit + Write operations with instructions) |
+| `opus-interactions-v0.jsonl` | Legacy: 360 records, instruction field empty (pre-fix) |
+| `opus-training-approved.jsonl` | Reviewed and approved entries in instruction-tuning format |
+
+### Collection Hooks
+
+| File | Hook | Purpose |
+|------|------|---------|
+| `~/.claude/hooks/capture-prompt.sh` | UserPromptSubmit | Caches user prompt to /tmp |
+| `~/.claude/hooks/training-collector.py` | PostToolUse | Filters and appends Edit/Write to JSONL |
+| `~/.claude/hooks/training-review.py` | Standalone CLI | Review, filter, and export collected data |
+
+### Quick Commands
+
+```bash
+# Collection statistics
+python3 ~/.claude/hooks/training-review.py --stats
+
+# Filter by project or date
+python3 ~/.claude/hooks/training-review.py --stats --project daily-code-review
+python3 ~/.claude/hooks/training-review.py --stats --since 2026-04-05
+
+# Interactive review (approve/reject pending entries)
+python3 ~/.claude/hooks/training-review.py
+
+# Export approved entries for fine-tuning
+python3 ~/.claude/hooks/training-review.py --export
+```
+
+### References
+
+- [Full spec](docs/superpowers/specs/2026-04-03-local-ai-pipeline-design.md): architecture, data flow, escalation logic, metrics, risk assessment
+- [Dataset README](~/.claude/datasets/README.md): JSONL schema, quality filters, collection rate, projections
+
 ## Tests
 
 ```bash

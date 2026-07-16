@@ -49,6 +49,7 @@ REPOS = [
             "migrations/",
             "__pycache__/",
             ".venv/",
+            "venv/",
         ],
     },
 ]
