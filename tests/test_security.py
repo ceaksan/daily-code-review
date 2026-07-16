@@ -477,3 +477,17 @@ class TestSecurityReport:
         assert "Refuted" in md
         assert "Not scanned" in md
         assert "Truncation" in md or "capped" in md.lower()
+
+    def test_not_scanned_path_and_reason_are_redacted(self):
+        secret_token = "AKIA1234567890ABCDEFGH"
+        not_scanned = [
+            {
+                "path": f"config/{secret_token}.env",
+                "reason": f"token {secret_token} in path",
+            }
+        ]
+        md = reporter.generate_security_report("myrepo", [], [], [], not_scanned, {})
+        assert secret_token not in md
+        assert "Not scanned" in md
+        not_scanned_section = md.split("Not scanned", 1)[1]
+        assert "REDACTED" in not_scanned_section

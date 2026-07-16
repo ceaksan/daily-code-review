@@ -119,7 +119,10 @@ def generate_security_report(
         lines.append(f"## Not scanned ({len(not_scanned)})")
         lines.append("")
         for n in not_scanned:
-            lines.append(f"- {n.get('path')} ({n.get('reason')})")
+            lines.append(
+                f"- {redact_secrets(str(n.get('path', '')))} "
+                f"({redact_secrets(str(n.get('reason', '')))})"
+            )
         lines.append("")
 
     if not (active or capped or refuted):
