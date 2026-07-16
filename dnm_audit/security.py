@@ -184,11 +184,9 @@ def build_inventory(repo_config: dict, config) -> tuple[list[dict], list[dict]]:
         override if override is not None else repo_config.get("source_dirs", [])
     )
     walk_dirs = list(source_dirs) + [".github"]
-    ignore_parts = {
-        d.strip("/")
-        for d in repo_config.get("ignore_dirs", [])
-        if not d.startswith("*")
-    }
+    ignore_dirs = repo_config.get("ignore_dirs", [])
+    ignore_parts = {d.strip("/") for d in ignore_dirs if not d.startswith("*")}
+    ignore_globs = [d for d in ignore_dirs if d.startswith("*")]
 
     inventory: list[dict] = []
     not_scanned: list[dict] = []
@@ -211,6 +209,8 @@ def build_inventory(repo_config: dict, config) -> tuple[list[dict], list[dict]]:
             continue
         if any(part in ignore_parts for part in rel_for_ignore.parts):
             continue
+        if any(fnmatch.fnmatch(p.name, g) for g in ignore_globs):
+            continue
         # symlink containment
         try:
             real = p.resolve()
@@ -220,12 +220,11 @@ def build_inventory(repo_config: dict, config) -> tuple[list[dict], list[dict]]:
             continue
         try:
             content_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+            size = p.stat().st_size
         except OSError:
             not_scanned.append({"path": rel, "reason": "unreadable"})
             continue
-        inventory.append(
-            {"path": rel, "content_hash": content_hash, "size": p.stat().st_size}
-        )
+        inventory.append({"path": rel, "content_hash": content_hash, "size": size})
 
     inventory.sort(key=lambda e: e["path"])
     not_scanned.sort(key=lambda e: e["path"])

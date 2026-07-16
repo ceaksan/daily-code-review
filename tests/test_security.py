@@ -132,6 +132,17 @@ class TestBuildInventory:
         assert "src/app.js" in paths
         assert "src/node_modules/x.js" not in paths
 
+    def test_ignore_dirs_glob_respected(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("x=1")
+        (tmp_path / "src" / "app.test.py").write_text("y=2")
+        inv, _ = security.build_inventory(
+            _repo(tmp_path, ignore_dirs=["*.test.py"]), SimpleNamespace()
+        )
+        paths = {e["path"] for e in inv}
+        assert "src/app.py" in paths
+        assert "src/app.test.py" not in paths
+
     def test_symlink_escape_skipped(self, tmp_path):
         outside = tmp_path.parent / "outside_secret.env"
         outside.write_text("SECRET=1")
