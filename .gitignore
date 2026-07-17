@@ -6,3 +6,6 @@ __pycache__/
 dnm_audit/config.py
 architecture.md
 docs/
+
+# Personal cron wrapper (contains local paths + healthcheck URL, keep local only)
+run-with-ping.sh
