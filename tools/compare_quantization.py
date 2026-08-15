@@ -95,15 +95,26 @@ def strip_thinking(text: str) -> str:
 
 
 def query_ollama(
-    model: str, prompt: str, think: str = "off", timeout: int = 180
+    model: str,
+    prompt: str,
+    think: str = "off",
+    timeout: int = 600,
+    keep_alive: str = "30m",
 ) -> tuple[str, dict]:
-    """Return (response_text, metrics). Empty text signals failure."""
+    """Return (response_text, metrics). Empty text signals failure.
+
+    keep_alive holds both models resident across the alternating A/B calls;
+    without it each sample evicts and reloads the other model, and an abandoned
+    request on timeout leaves the server generating so the next call queues
+    behind it and also times out.
+    """
     body = {
         "model": model,
         "prompt": prompt,
         "stream": False,
         "options": {"temperature": 0.1},
         "think": False if think == "off" else think,
+        "keep_alive": keep_alive,
     }
     payload = json.dumps(body).encode("utf-8")
 
@@ -190,8 +201,13 @@ def main():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=180,
-        help="Per-model request timeout in seconds (default: 180)",
+        default=600,
+        help="Per-model request timeout in seconds (default: 600)",
+    )
+    parser.add_argument(
+        "--keep-alive",
+        default="30m",
+        help="Ollama keep_alive, holds both models resident (default: 30m)",
     )
     parser.add_argument(
         "--delay",
@@ -213,6 +229,15 @@ def main():
     print(f"Model B: {args.model_b}", file=sys.stderr)
     print(f"Think:   {args.think} (both models)", file=sys.stderr)
 
+    for model in (args.model_a, args.model_b):
+        print(f"Warming {model}...", file=sys.stderr, flush=True)
+        _, warm = query_ollama(
+            model, "Say OK", args.think, args.timeout, args.keep_alive
+        )
+        if not warm:
+            print(f"Error: {model} failed to warm up", file=sys.stderr)
+            sys.exit(1)
+
     results = []
     a_scores = {"correctness": [], "detail": [], "actionability": []}
     b_scores = {"correctness": [], "detail": [], "actionability": []}
@@ -230,7 +255,7 @@ def main():
 
         print(f"  Querying {args.model_a}...", file=sys.stderr, flush=True)
         resp_a, perf_a = query_ollama(
-            args.model_a, review_prompt, args.think, args.timeout
+            args.model_a, review_prompt, args.think, args.timeout, args.keep_alive
         )
         if not resp_a:
             print("  SKIP (model A failed)", file=sys.stderr)
@@ -238,7 +263,7 @@ def main():
 
         print(f"  Querying {args.model_b}...", file=sys.stderr, flush=True)
         resp_b, perf_b = query_ollama(
-            args.model_b, review_prompt, args.think, args.timeout
+            args.model_b, review_prompt, args.think, args.timeout, args.keep_alive
         )
         if not resp_b:
             print("  SKIP (model B failed)", file=sys.stderr)
