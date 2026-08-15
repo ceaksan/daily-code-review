@@ -13,9 +13,13 @@ Usage:
         --think off \
         --output comparison-report.json
 
-The --think setting is global: it applies to both models in a run, so a run
-cannot compare two thinking levels against each other. To measure the cost of
-thinking, do two runs with different --think values and diff the reports.
+--think sets the reasoning level for both models; --think-a and --think-b
+override it per model, for pairings where one model benefits from thinking and
+the other does not.
+
+Beware what a mixed run measures: with different levels on each side, the score
+gap confounds model quality with reasoning budget. To isolate the cost of
+thinking for one model, keep both sides equal and diff two runs.
 """
 
 import argparse
@@ -195,8 +199,18 @@ def main():
         "--think",
         choices=THINK_LEVELS,
         default="off",
-        help="Reasoning level applied to BOTH models (default: off). "
-        "Compare levels by diffing two runs, not within one run.",
+        help="Reasoning level for both models (default: off)",
+    )
+    parser.add_argument(
+        "--think-a",
+        choices=THINK_LEVELS,
+        help="Override --think for model A. Mixing levels confounds model "
+        "quality with reasoning budget, so read such runs with care.",
+    )
+    parser.add_argument(
+        "--think-b",
+        choices=THINK_LEVELS,
+        help="Override --think for model B",
     )
     parser.add_argument(
         "--timeout",
@@ -217,6 +231,8 @@ def main():
     )
 
     args = parser.parse_args()
+    think_a = args.think_a or args.think
+    think_b = args.think_b or args.think
 
     samples_path = Path(args.samples)
     if not samples_path.exists():
@@ -227,13 +243,14 @@ def main():
     print(f"Loaded {len(samples)} samples", file=sys.stderr)
     print(f"Model A: {args.model_a}", file=sys.stderr)
     print(f"Model B: {args.model_b}", file=sys.stderr)
-    print(f"Think:   {args.think} (both models)", file=sys.stderr)
+    if think_a == think_b:
+        print(f"Think:   {think_a} (both models)", file=sys.stderr)
+    else:
+        print(f"Think:   A={think_a}  B={think_b} (mixed)", file=sys.stderr)
 
-    for model in (args.model_a, args.model_b):
+    for model, think in ((args.model_a, think_a), (args.model_b, think_b)):
         print(f"Warming {model}...", file=sys.stderr, flush=True)
-        _, warm = query_ollama(
-            model, "Say OK", args.think, args.timeout, args.keep_alive
-        )
+        _, warm = query_ollama(model, "Say OK", think, args.timeout, args.keep_alive)
         if not warm:
             print(f"Error: {model} failed to warm up", file=sys.stderr)
             sys.exit(1)
@@ -241,8 +258,8 @@ def main():
     results = []
     a_scores = {"correctness": [], "detail": [], "actionability": []}
     b_scores = {"correctness": [], "detail": [], "actionability": []}
-    a_perf = {"tok_per_s": [], "total_seconds": []}
-    b_perf = {"tok_per_s": [], "total_seconds": []}
+    a_perf = {"tok_per_s": [], "total_seconds": [], "thinking_tokens": []}
+    b_perf = {"tok_per_s": [], "total_seconds": [], "thinking_tokens": []}
 
     for i, sample in enumerate(samples):
         print(
@@ -255,7 +272,7 @@ def main():
 
         print(f"  Querying {args.model_a}...", file=sys.stderr, flush=True)
         resp_a, perf_a = query_ollama(
-            args.model_a, review_prompt, args.think, args.timeout, args.keep_alive
+            args.model_a, review_prompt, think_a, args.timeout, args.keep_alive
         )
         if not resp_a:
             print("  SKIP (model A failed)", file=sys.stderr)
@@ -263,7 +280,7 @@ def main():
 
         print(f"  Querying {args.model_b}...", file=sys.stderr, flush=True)
         resp_b, perf_b = query_ollama(
-            args.model_b, review_prompt, args.think, args.timeout, args.keep_alive
+            args.model_b, review_prompt, think_b, args.timeout, args.keep_alive
         )
         if not resp_b:
             print("  SKIP (model B failed)", file=sys.stderr)
@@ -343,7 +360,8 @@ def main():
     summary = {
         "model_a": args.model_a,
         "model_b": args.model_b,
-        "think": args.think,
+        "think_a": think_a,
+        "think_b": think_b,
         "n": len(results),
     }
     for dim in ("correctness", "detail", "actionability"):
@@ -384,7 +402,10 @@ def main():
 
     # Print summary to stderr
     print("\n--- Summary ---", file=sys.stderr)
-    print(f"  Samples: {summary['n']}  Think: {summary['think']}", file=sys.stderr)
+    print(
+        f"  Samples: {summary['n']}  Think: A={summary['think_a']} B={summary['think_b']}",
+        file=sys.stderr,
+    )
     for dim in ("correctness", "detail", "actionability"):
         a = summary[f"a_mean_{dim}"]
         b = summary[f"b_mean_{dim}"]
