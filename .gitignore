@@ -9,3 +9,4 @@ docs/
 
 # Personal cron wrapper (contains local paths + healthcheck URL, keep local only)
 run-with-ping.sh
+.claude/settings.local.json
